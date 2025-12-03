@@ -35,14 +35,19 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$VMName,
+    [string]$VMName = "",
     [string]$GPUName = "",
     [string]$LogFile = ""
 )
 
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
+
+# Select VM if not specified
+if ([string]::IsNullOrWhiteSpace($VMName)) {
+    $VMName = Select-ManagedVM
+    if (-not $VMName) { exit 0 }
+}
 
 #region Main Execution
 

@@ -55,6 +55,50 @@ function Test-GuidMatch {
 }
 #endregion
 
+#region VM Selection Functions
+
+function Select-ManagedVM {
+    <#
+    .SYNOPSIS
+        Shows a selection dialog for all Hyper-V VMs (managed and unmanaged)
+    .DESCRIPTION
+        Lists all Hyper-V VMs and marks which are already managed.
+        Unmanaged VMs will be auto-imported when selected.
+    .RETURNS
+        The selected VM name, or $null if no VMs available or user cancels
+    #>
+    $allVMs = @(Get-VM -ErrorAction SilentlyContinue)
+    if ($allVMs.Count -eq 0) {
+        Write-Host "No Hyper-V VMs found." -ForegroundColor Yellow
+        return $null
+    }
+
+    $managedVMs = Get-AllVMInstancesFromRegistry
+
+    if ($allVMs.Count -eq 1) {
+        Write-Host "Auto-selecting: $($allVMs[0].Name)" -ForegroundColor Cyan
+        return $allVMs[0].Name
+    }
+
+    Write-Host "Select VM:" -ForegroundColor Yellow
+    for ($i = 0; $i -lt $allVMs.Count; $i++) {
+        $vm = $allVMs[$i]
+        $isManaged = $managedVMs | Where-Object { Test-GuidMatch $_.ID $vm.VMId.Guid }
+        $managedStr = if ($isManaged) { "" } else { " [unmanaged]" }
+        Write-Host "  $($i+1). $($vm.Name) ($($vm.State))$managedStr"
+    }
+    Write-Host ""
+
+    do {
+        $sel = Read-Host "Select (1-$($allVMs.Count))"
+        $selIndex = [int]$sel - 1
+    } while ($selIndex -lt 0 -or $selIndex -ge $allVMs.Count)
+
+    return $allVMs[$selIndex].Name
+}
+
+#endregion
+
 #region Script Initialization Functions
 
 function Write-ScriptHeader {
@@ -549,6 +593,120 @@ function Sync-VMNameInRegistry {
     return $false
 }
 
+function Import-VMToRegistry {
+    <#
+    .SYNOPSIS
+        Auto-imports a Hyper-V VM into the registry if not already managed
+    .DESCRIPTION
+        Checks if VM exists in Hyper-V and imports it to registry with:
+        - Network adapter repair (adds missing Internal/External adapters)
+        - Static MAC address assignment (replaces dynamic MACs)
+        - Auto-assigned IP address from available range
+    .PARAMETER VMName
+        Name of the VM to import
+    .PARAMETER Quiet
+        Suppress non-essential output
+    .RETURNS
+        VM data hashtable if successful, throws on failure
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VMName,
+        [switch]$Quiet
+    )
+
+    # Check if VM exists in Hyper-V
+    $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+    if (-not $vm) {
+        throw "VM '$VMName' not found in Hyper-V"
+    }
+
+    $vmID = $vm.VMId.Guid
+
+    # Check if already in registry
+    $instancePath = Join-Path $script:RegistryInstancesPath $vmID
+    if (Test-Path $instancePath) {
+        # Already managed, return existing data
+        return Get-VMInstanceByID -VMID $vmID
+    }
+
+    # Auto-import the VM
+    if (-not $Quiet) {
+        Write-Log "Auto-importing VM '$VMName' to registry..." -Level Info
+    }
+
+    # Check and fix network adapters
+    $adapters = Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue
+    $hasInternal = $adapters | Where-Object { $_.SwitchName -eq $script:InternalSwitch }
+    $hasExternal = $adapters | Where-Object { $_.SwitchName -eq $script:ExternalSwitch }
+    $needsMacReplacement = @()
+
+    # Identify adapters needing MAC replacement
+    foreach ($adapter in $adapters) {
+        if ($adapter.DynamicMacAddressEnabled -and ($adapter.SwitchName -eq $script:InternalSwitch -or $adapter.SwitchName -eq $script:ExternalSwitch)) {
+            $needsMacReplacement += @{ SwitchName = $adapter.SwitchName; Type = $adapter.SwitchName }
+        }
+    }
+
+    # Check if we need to stop VM for modifications
+    $needsStop = (-not $hasInternal -or -not $hasExternal -or $needsMacReplacement.Count -gt 0)
+    $wasRunning = $vm.State -eq 'Running'
+
+    if ($needsStop -and $wasRunning) {
+        if (-not $Quiet) {
+            Write-Log "Stopping VM to configure network adapters..." -Level Warning
+        }
+        Stop-VM -Name $VMName -Force -ErrorAction Stop
+        Start-Sleep -Seconds 2
+    }
+
+    # Add missing adapters
+    if (-not $hasExternal) {
+        if (Get-VMSwitch -Name $script:ExternalSwitch -ErrorAction SilentlyContinue) {
+            Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:ExternalSwitch -Name $script:ExternalSwitch
+            $mac = Set-VMStaticMac -VMName $VMName -SwitchName $script:ExternalSwitch -Force
+            if (-not $Quiet) {
+                Write-Log "  Added External adapter with MAC: $mac" -Level Success
+            }
+        }
+    }
+
+    if (-not $hasInternal) {
+        if (Get-VMSwitch -Name $script:InternalSwitch -ErrorAction SilentlyContinue) {
+            Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:InternalSwitch -Name $script:InternalSwitch
+            $mac = Set-VMStaticMac -VMName $VMName -SwitchName $script:InternalSwitch -Force
+            if (-not $Quiet) {
+                Write-Log "  Added Internal adapter with MAC: $mac" -Level Success
+            }
+        }
+    }
+
+    # Replace dynamic MACs with static TP-Link MACs
+    foreach ($adapterInfo in $needsMacReplacement) {
+        $mac = Set-VMStaticMac -VMName $VMName -SwitchName $adapterInfo.SwitchName -Force
+        if (-not $Quiet) {
+            Write-Log "  Replaced $($adapterInfo.Type) adapter with static MAC: $mac" -Level Success
+        }
+    }
+
+    # Auto-assign IP
+    $internalIP = Get-NextAvailableIP
+
+    # Save to registry
+    $vmData = @{
+        InternalIP = $internalIP
+        Configured = $false
+    }
+
+    Save-VMInstanceToRegistry -VMID $vmID -VMData $vmData
+    if (-not $Quiet) {
+        Write-Log "VM '$VMName' imported to registry (IP: $internalIP)" -Level Success
+    }
+
+    # Return the full VM data
+    return Get-VMInstanceByID -VMID $vmID
+}
+
 function Get-OrphanedVMInstances {
     <#
     .SYNOPSIS
@@ -653,24 +811,29 @@ function Test-VMExists {
 function Assert-VMExistsInRegistryAndHyperV {
     <#
     .SYNOPSIS
-        Validates VM exists in both registry and Hyper-V, throws if not found
+        Validates VM exists in Hyper-V and ensures it's in registry (auto-imports if needed)
+    .DESCRIPTION
+        Checks if VM exists in Hyper-V. If not in registry, auto-imports it.
     .RETURNS
-        The VM data from registry if found
+        The VM data from registry
     #>
     param(
         [Parameter(Mandatory=$true)]
         [string]$VMName
     )
 
-    $vmData = Get-VMInstanceFromRegistry -VMName $VMName
-    if (-not $vmData) {
-        throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
+    # First check if VM exists in Hyper-V
+    if (-not (Test-VMExists -VMName $VMName)) {
+        throw "VM '$VMName' not found in Hyper-V."
     }
 
-    Write-Log "Found VM in registry: $VMName" -Level Success
-
-    if (-not (Test-VMExists -VMName $VMName)) {
-        throw "VM '$VMName' exists in registry but not in Hyper-V. The VM may have been deleted."
+    # Check if in registry, auto-import if not
+    $vmData = Get-VMInstanceFromRegistry -VMName $VMName
+    if (-not $vmData) {
+        # Auto-import the VM
+        $vmData = Import-VMToRegistry -VMName $VMName
+    } else {
+        Write-Log "Found VM in registry: $VMName" -Level Success
     }
 
     return $vmData

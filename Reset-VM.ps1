@@ -48,8 +48,7 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$VMName,
+    [string]$VMName = "",
     [string]$VMUsername = "home",
     [string]$VMPassword = "home",
     [int64]$Memory = 0,
@@ -61,6 +60,12 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
+# Select VM if not specified
+if ([string]::IsNullOrWhiteSpace($VMName)) {
+    $VMName = Select-ManagedVM
+    if (-not $VMName) { exit 0 }
+}
+
 $MAX_CONFIG_RETRIES = 3
 
 #region Main Execution
@@ -69,12 +74,21 @@ try {
     Write-ScriptHeader -Title "VM Recreation Script"
     $LogFile = Initialize-Script -LogFile $LogFile
 
-    # Get VM from registry (don't require Hyper-V existence - we're recreating it)
+    # Get VM from registry (auto-import if not managed)
+    # First check if VM exists in Hyper-V
+    $vmExists = Test-VMExists -VMName $VMName
+
     $vmData = Get-VMInstanceFromRegistry -VMName $VMName
     if (-not $vmData) {
-        throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
+        if ($vmExists) {
+            # Auto-import the VM
+            $vmData = Import-VMToRegistry -VMName $VMName
+        } else {
+            throw "VM '$VMName' not found in Hyper-V or registry."
+        }
+    } else {
+        Write-Log "Found VM in registry: $VMName" -Level Success
     }
-    Write-Log "Found VM in registry: $VMName" -Level Success
 
     # Get global settings for template path
     $globalSettings = Get-GlobalSettingsFromRegistry
