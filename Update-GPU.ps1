@@ -55,6 +55,14 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
+# Load defaults from registry if parameters not explicitly provided
+$globalSettings = Get-GlobalSettingsFromRegistry
+if ($globalSettings) {
+    if (-not $PSBoundParameters.ContainsKey('VHDFolder') -and $globalSettings.VHDFolder) {
+        $VHDFolder = $globalSettings.VHDFolder
+    }
+}
+
 #region Main Execution
 
 try {
@@ -92,8 +100,7 @@ try {
     $availableGPUs = Show-AvailableGPUs
     Write-Host ""
 
-    # Get global settings
-    $globalSettings = Get-GlobalSettingsFromRegistry
+    # Get template path from global settings (already loaded at script start)
     $templateVHDX = if ($globalSettings -and $globalSettings.TemplateVHDX) {
         $globalSettings.TemplateVHDX
     } else {

@@ -80,6 +80,20 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
+# Load defaults from registry if parameters not explicitly provided
+$globalSettings = Get-GlobalSettingsFromRegistry
+if ($globalSettings) {
+    if (-not $PSBoundParameters.ContainsKey('Memory') -and $globalSettings.DefaultMemory) {
+        $Memory = [int64]$globalSettings.DefaultMemory
+    }
+    if (-not $PSBoundParameters.ContainsKey('CPU') -and $globalSettings.DefaultCPU) {
+        $CPU = [int]$globalSettings.DefaultCPU
+    }
+    if (-not $PSBoundParameters.ContainsKey('VHDFolder') -and $globalSettings.VHDFolder) {
+        $VHDFolder = $globalSettings.VHDFolder
+    }
+}
+
 # Resource limits
 $MIN_MEMORY_MB = 512
 $MAX_MEMORY_MB = 131072
@@ -203,7 +217,7 @@ function Get-TemplateVHDX {
     $templateVHDX = Join-Path $VHDFolder "template-with-gpu.vhdx"
 
     if (-not (Test-Path $templateVHDX)) {
-        throw "Template VHDX not found: $templateVHDX`nRun Update-GPU.ps1 first to create the template."
+        return $null
     }
 
     Write-Log "Using template: $templateVHDX" -Level Success
@@ -295,6 +309,33 @@ try {
         # Get template VHDX (must already exist)
         Write-Host ""
         $templateVHDX = Get-TemplateVHDX -VHDFolder $VHDFolder
+
+        if (-not $templateVHDX) {
+            $expectedPath = Join-Path $VHDFolder "template-with-gpu.vhdx"
+            Write-Log "Template VHDX not found: $expectedPath" -Level Warning
+            Write-Host ""
+            Write-Host "Do you want to create an empty VHD? (Y/N): " -NoNewline -ForegroundColor Cyan
+            $confirm = Read-Host
+
+            if ($confirm -match '^[Yy]') {
+                $useEmptyVHD = $true
+                Write-Host "Size (GB): " -NoNewline -ForegroundColor Cyan
+                $VHDSizeGB = [int](Read-Host)
+
+                if ($VHDSizeGB -lt 10) {
+                    throw "VHD size must be at least 10 GB"
+                }
+                if ($VHDSizeGB -gt 2048) {
+                    throw "VHD size cannot exceed 2048 GB (2TB)"
+                }
+
+                $vhdSizeBytes = [int64]$VHDSizeGB * 1GB
+                Write-Log "VHD Size: $VHDSizeGB GB (Fixed)" -Level Success
+            } else {
+                Write-Log "Exiting. Run Update-GPU.ps1 to create a template VHDX." -Level Info
+                exit 0
+            }
+        }
     }
 
     # Setup network

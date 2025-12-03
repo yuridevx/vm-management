@@ -1576,6 +1576,9 @@ function Initialize-VMConfiguration {
         [string]$GPUInstancePath
     )
 
+    # Disable Secure Boot (required for GPU passthrough)
+    Set-VMFirmware -VMName $VMName -EnableSecureBoot Off -ErrorAction Stop
+
     # Configure VM settings
     Set-VM -Name $VMName -ProcessorCount $ProcessorCount -StaticMemory `
            -CheckpointType Disabled -GuestControlledCacheTypes $true `
@@ -1650,9 +1653,9 @@ function New-VMFromEmptyVHD {
         [string]$GPUInstancePath
     )
 
-    # Create empty VHD
-    Write-Log "Creating empty VHD: $VHDPath ($([Math]::Round($VHDSizeBytes/1GB, 2)) GB)"
-    New-VHD -Path $VHDPath -SizeBytes $VHDSizeBytes -Dynamic | Out-Null
+    # Create empty VHD (fixed size)
+    Write-Log "Creating empty VHD: $VHDPath ($([Math]::Round($VHDSizeBytes/1GB, 2)) GB, Fixed)"
+    New-VHD -Path $VHDPath -SizeBytes $VHDSizeBytes -Fixed | Out-Null
 
     # Create VM
     Write-Log "Creating VM: $VMName"
