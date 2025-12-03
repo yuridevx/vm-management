@@ -8,17 +8,13 @@
 
 .DESCRIPTION
     Creates exactly 1 Hyper-V VM with:
-    - GPU driver injection into VHD (original VHDX is NEVER modified)
-    - Creates a template VHDX with GPU drivers, then clones it for the VM
+    - Uses existing template VHDX with GPU drivers (create via Update-GPU.ps1)
     - Dual network setup (External + Internal)
     - Random MAC addresses (TP-Link OUI)
     - Random hostname assignment
     - Static IP configuration
     - GPU partition adapter assignment
     - Registry-based state tracking
-
-.PARAMETER VHDXPath
-    Path to source VHDX file. If empty, searches for *.vhdx in current folder.
 
 .PARAMETER VMName
     Name for the VM. Default: HyperV-VM
@@ -55,11 +51,11 @@
 
 .EXAMPLE
     .\Deploy-VM.ps1
-    Creates 1 VM with default settings using source VHDX
+    Creates 1 VM with default settings using template VHDX
 
 .EXAMPLE
-    .\Deploy-VM.ps1 -VHDXPath "C:\Images\Win11.vhdx" -VMName "MyVM" -Memory 8GB -CPU 8
-    Creates 1 VM with custom resources from source VHDX
+    .\Deploy-VM.ps1 -VMName "MyVM" -Memory 8GB -CPU 8
+    Creates 1 VM with custom resources
 
 .EXAMPLE
     .\Deploy-VM.ps1 -VMName "BlankVM" -EmptyVHD -VHDSizeGB 100
@@ -68,7 +64,6 @@
 
 [CmdletBinding()]
 param(
-    [string]$VHDXPath = "",
     [string]$VMName = "HyperV-VM",
     [int64]$Memory = 5200MB,
     [int]$CPU = 4,
@@ -200,53 +195,18 @@ function Initialize-NetworkSwitches {
     }
 }
 
-function Find-SourceVHDX {
-    if (-not [string]::IsNullOrWhiteSpace($VHDXPath)) {
-        if (Test-Path $VHDXPath) { return (Resolve-Path $VHDXPath).Path }
-        throw "Specified VHDX not found: $VHDXPath"
-    }
-
-    $vhdxFiles = Get-ChildItem -Path . -Filter "*.vhdx" -File
-    if ($vhdxFiles.Count -eq 0) { throw "No VHDX files found. Specify -VHDXPath" }
-    if ($vhdxFiles.Count -eq 1) {
-        Write-Log "Found VHDX: $($vhdxFiles[0].Name)" -Level Success
-        return $vhdxFiles[0].FullName
-    }
-
-    Write-Host "`nSelect VHDX file:"
-    for ($i = 0; $i -lt $vhdxFiles.Count; $i++) {
-        Write-Host "  $($i+1). $($vhdxFiles[$i].Name) ($([Math]::Round($vhdxFiles[$i].Length/1GB, 2)) GB)"
-    }
-    do { $sel = [int](Read-Host "Select (1-$($vhdxFiles.Count))") - 1 }
-    while ($sel -lt 0 -or $sel -ge $vhdxFiles.Count)
-    return $vhdxFiles[$sel].FullName
-}
-
-function Initialize-TemplateVHDX {
+function Get-TemplateVHDX {
     param(
-        [string]$VHDFolder,
-        [array]$AvailableGPUs,
-        [string]$SourceVHDX
+        [string]$VHDFolder
     )
 
     $templateVHDX = Join-Path $VHDFolder "template-with-gpu.vhdx"
 
     if (-not (Test-Path $templateVHDX)) {
-        Write-Host ""
-        Write-Log "Creating GPU-enabled template (this may take several minutes)..." -Level Info
-        Copy-Item -Path $SourceVHDX -Destination $templateVHDX -Force -ErrorAction Stop
-
-        if (-not (Test-Path $templateVHDX)) {
-            throw "Template copy failed - file not created"
-        }
-
-        Inject-GpuDrivers -VHDPath $templateVHDX -GPUList $AvailableGPUs
-        Write-Log "Template VHDX created successfully" -Level Success
-    }
-    else {
-        Write-Log "Using existing template: $templateVHDX" -Level Success
+        throw "Template VHDX not found: $templateVHDX`nRun Update-GPU.ps1 first to create the template."
     }
 
+    Write-Log "Using template: $templateVHDX" -Level Success
     return $templateVHDX
 }
 
@@ -304,9 +264,8 @@ try {
     # Detect GPUs
     $availableGPUs = Show-AvailableGPUs
 
-    # Handle empty VHD or source VHDX
+    # Handle empty VHD or template VHDX
     $useEmptyVHD = $EmptyVHD
-    $sourceVHDX = $null
     $templateVHDX = $null
     $vhdSizeBytes = 0
 
@@ -333,13 +292,9 @@ try {
         Write-Log "VHD Size: $VHDSizeGB GB" -Level Success
     }
     else {
-        # Find source VHDX
+        # Get template VHDX (must already exist)
         Write-Host ""
-        $sourceVHDX = Find-SourceVHDX
-        Write-Log "Source VHDX: $sourceVHDX" -Level Success
-
-        # Create template if needed
-        $templateVHDX = Initialize-TemplateVHDX -VHDFolder $VHDFolder -AvailableGPUs $availableGPUs -SourceVHDX $sourceVHDX
+        $templateVHDX = Get-TemplateVHDX -VHDFolder $VHDFolder
     }
 
     # Setup network
@@ -440,7 +395,6 @@ try {
 
     # Save global settings
     Save-GlobalSettingsToRegistry -Settings @{
-        SourceVHDX = $sourceVHDX
         TemplateVHDX = $templateVHDX
         VHDFolder = $VHDFolder
         DefaultMemory = $Memory

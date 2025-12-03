@@ -432,7 +432,6 @@ function Get-GlobalSettingsFromRegistry {
             Version = $props.Version
             Created = $props.Created
             Updated = $props.Updated
-            SourceVHDX = $props.SourceVHDX
             TemplateVHDX = $props.TemplateVHDX
             VHDFolder = $props.VHDFolder
             DefaultMemory = $props.DefaultMemory
