@@ -100,8 +100,8 @@ try {
         Join-Path $VHDFolder "template-with-gpu.vhdx"
     }
 
-    # Update template VHDX (only for -TemplateOnly or -AllVMs, not for single VM updates)
-    if ($TemplateOnly -or $AllVMs) {
+    # Update template VHDX (only for -TemplateOnly)
+    if ($TemplateOnly) {
         Write-Host "========================================" -ForegroundColor Yellow
         Write-Host "  Updating Template VHDX" -ForegroundColor Yellow
         Write-Host "========================================" -ForegroundColor Yellow
