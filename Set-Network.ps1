@@ -67,6 +67,14 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
+# Apply defaults from constants if not explicitly provided
+if (-not $PSBoundParameters.ContainsKey('MaxRetries')) {
+    $MaxRetries = $script:MAX_CONFIG_RETRIES
+}
+if (-not $PSBoundParameters.ContainsKey('HeartbeatTimeout')) {
+    $HeartbeatTimeout = $script:VM_HEARTBEAT_TIMEOUT_SEC
+}
+
 # Select VM if not specified
 if ([string]::IsNullOrWhiteSpace($VMName)) {
     $VMName = Select-ManagedVM

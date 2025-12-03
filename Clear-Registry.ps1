@@ -37,19 +37,16 @@ try {
     Write-ScriptHeader -Title "Clear VMM Registry Data"
     Test-AdministratorPrivileges
 
-    $registryPath = "HKLM:\SOFTWARE\HyperV-VMM"
-
     # Check if registry exists
-    if (-not (Test-Path $registryPath)) {
+    if (-not (Test-Path $script:RegistryBasePath)) {
         Write-Host "No VMM registry data found." -ForegroundColor Yellow
         exit 0
     }
 
     # Get current stats
-    $instancesPath = Join-Path $registryPath "Instances"
     $vmCount = 0
-    if (Test-Path $instancesPath) {
-        $vmCount = (Get-ChildItem -Path $instancesPath -ErrorAction SilentlyContinue | Measure-Object).Count
+    if (Test-Path $script:RegistryInstancesPath) {
+        $vmCount = (Get-ChildItem -Path $script:RegistryInstancesPath -ErrorAction SilentlyContinue | Measure-Object).Count
     }
 
     # Show what will be deleted
@@ -73,7 +70,7 @@ try {
     # Remove the entire registry key
     Write-Host ""
     Write-Log "Removing registry data..." -Level Warning
-    Remove-Item -Path $registryPath -Recurse -Force -ErrorAction Stop
+    Remove-Item -Path $script:RegistryBasePath -Recurse -Force -ErrorAction Stop
     Write-Log "Registry data cleared successfully" -Level Success
 
     Write-Host ""

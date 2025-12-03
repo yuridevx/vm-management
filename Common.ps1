@@ -18,11 +18,39 @@
 $script:LogFilePath = $null
 $script:StateLockMutex = $null
 
-# Common constants
+# Network constants
 $script:InternalSwitch = "Internal"
 $script:ExternalSwitch = "External"
 $script:HostIP = "10.0.0.1"
 $script:StartIP = 10
+
+# Resource limits
+$script:MIN_MEMORY_MB = 512
+$script:MAX_MEMORY_MB = 131072
+$script:MIN_CPU = 1
+$script:MAX_CPU = 64
+
+# Timeouts and retries
+$script:VM_HEARTBEAT_TIMEOUT_SEC = 90
+$script:MAX_CONFIG_RETRIES = 3
+
+# Default paths
+$script:DEFAULT_VHD_FOLDER = "C:\VMs"
+$script:DEFAULT_TEMPLATE_NAME = "template.vhdx"
+
+# Default VM settings
+$script:DEFAULT_VM_NAME = "HyperV-VM"
+$script:DEFAULT_MEMORY = 5200MB
+$script:DEFAULT_CPU = 4
+$script:DEFAULT_GPU_NAME = "AUTO"
+
+# Default VM credentials
+$script:DEFAULT_VM_USERNAME = "home"
+$script:DEFAULT_VM_PASSWORD = "home"
+
+# VHD size limits
+$script:MIN_VHD_SIZE_GB = 10
+$script:MAX_VHD_SIZE_GB = 2048
 
 # Registry path for VM state storage
 $script:RegistryBasePath = "HKLM:\SOFTWARE\HyperV-VMM"
@@ -1276,6 +1304,72 @@ function Configure-VMNetwork {
     }
 
     return $success
+}
+
+#endregion
+
+#region Path Resolution Functions
+
+function Get-TemplateVHDXPath {
+    <#
+    .SYNOPSIS
+        Resolves the template VHDX path from global settings or defaults
+    .PARAMETER VHDFolder
+        The VHD folder to use as base for relative paths
+    .RETURNS
+        The resolved template VHDX path, or $null if not found
+    #>
+    param(
+        [string]$VHDFolder = $script:DEFAULT_VHD_FOLDER
+    )
+
+    $globalSettings = Get-GlobalSettingsFromRegistry
+
+    # Determine template path
+    $templateVHDX = if ($globalSettings -and $globalSettings.TemplateVHDX) {
+        $configuredPath = $globalSettings.TemplateVHDX
+        # If not absolute path, look in VHD folder
+        if (-not [System.IO.Path]::IsPathRooted($configuredPath)) {
+            Join-Path $VHDFolder $configuredPath
+        } else {
+            $configuredPath
+        }
+    } else {
+        Join-Path $VHDFolder $script:DEFAULT_TEMPLATE_NAME
+    }
+
+    if (-not (Test-Path $templateVHDX)) {
+        return $null
+    }
+
+    Write-Log "Using template: $templateVHDX" -Level Success
+    return $templateVHDX
+}
+
+function Get-ExpectedTemplatePath {
+    <#
+    .SYNOPSIS
+        Gets the expected template path based on settings (even if file doesn't exist)
+    .PARAMETER VHDFolder
+        The VHD folder to use as base for relative paths
+    .RETURNS
+        The expected template path
+    #>
+    param(
+        [string]$VHDFolder = $script:DEFAULT_VHD_FOLDER
+    )
+
+    $globalSettings = Get-GlobalSettingsFromRegistry
+
+    if ($globalSettings -and $globalSettings.TemplateVHDX) {
+        $configuredPath = $globalSettings.TemplateVHDX
+        if (-not [System.IO.Path]::IsPathRooted($configuredPath)) {
+            return Join-Path $VHDFolder $configuredPath
+        }
+        return $configuredPath
+    }
+
+    return Join-Path $VHDFolder $script:DEFAULT_TEMPLATE_NAME
 }
 
 #endregion

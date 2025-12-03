@@ -5,8 +5,21 @@ param(
     [string]$Password = "home"
 )
 
-$secPass = ConvertTo-SecureString $Password -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential($Username, $secPass)
+# Load shared functions
+. "$PSScriptRoot\Common.ps1"
+
+# Apply defaults from constants if not explicitly provided
+if (-not $PSBoundParameters.ContainsKey('VMName')) {
+    $VMName = $script:DEFAULT_VM_NAME
+}
+if (-not $PSBoundParameters.ContainsKey('Username')) {
+    $Username = $script:DEFAULT_VM_USERNAME
+}
+if (-not $PSBoundParameters.ContainsKey('Password')) {
+    $Password = $script:DEFAULT_VM_PASSWORD
+}
+
+$cred = New-VMCredential -Username $Username -Password $Password
 
 Write-Host "Connecting to VM '$VMName' as '$Username'..." -ForegroundColor Cyan
 

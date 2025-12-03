@@ -55,11 +55,13 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
-# Load defaults from registry if parameters not explicitly provided
+# Load defaults from registry or constants if parameters not explicitly provided
 $globalSettings = Get-GlobalSettingsFromRegistry
-if ($globalSettings) {
-    if (-not $PSBoundParameters.ContainsKey('VHDFolder') -and $globalSettings.VHDFolder) {
+if (-not $PSBoundParameters.ContainsKey('VHDFolder')) {
+    if ($globalSettings -and $globalSettings.VHDFolder) {
         $VHDFolder = $globalSettings.VHDFolder
+    } else {
+        $VHDFolder = $script:DEFAULT_VHD_FOLDER
     }
 }
 
@@ -104,7 +106,7 @@ try {
     $templateVHDX = if ($globalSettings -and $globalSettings.TemplateVHDX) {
         $globalSettings.TemplateVHDX
     } else {
-        Join-Path $VHDFolder "template-with-gpu.vhdx"
+        Join-Path $VHDFolder $script:DEFAULT_TEMPLATE_NAME
     }
 
     # Update template VHDX (only for -TemplateOnly)

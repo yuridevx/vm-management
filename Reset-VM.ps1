@@ -60,13 +60,22 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
+# Apply defaults from constants if parameters not explicitly provided
+if (-not $PSBoundParameters.ContainsKey('VMUsername')) {
+    $VMUsername = $script:DEFAULT_VM_USERNAME
+}
+if (-not $PSBoundParameters.ContainsKey('VMPassword')) {
+    $VMPassword = $script:DEFAULT_VM_PASSWORD
+}
+if (-not $PSBoundParameters.ContainsKey('HeartbeatTimeout')) {
+    $HeartbeatTimeout = $script:VM_HEARTBEAT_TIMEOUT_SEC
+}
+
 # Select VM if not specified
 if ([string]::IsNullOrWhiteSpace($VMName)) {
     $VMName = Select-ManagedVM
     if (-not $VMName) { exit 0 }
 }
-
-$MAX_CONFIG_RETRIES = 3
 
 #region Main Execution
 
@@ -190,7 +199,7 @@ try {
                                              -Hostname $newHostname `
                                              -Credential $credential `
                                              -InternalMAC $vmResult.InternalMAC `
-                                             -MaxRetries $MAX_CONFIG_RETRIES
+                                             -MaxRetries $script:MAX_CONFIG_RETRIES
         }
     }
 

@@ -80,7 +80,30 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
-# Load defaults from registry if parameters not explicitly provided
+# Apply defaults from constants if parameters not explicitly provided
+if (-not $PSBoundParameters.ContainsKey('VMName')) {
+    $VMName = $script:DEFAULT_VM_NAME
+}
+if (-not $PSBoundParameters.ContainsKey('Memory')) {
+    $Memory = $script:DEFAULT_MEMORY
+}
+if (-not $PSBoundParameters.ContainsKey('CPU')) {
+    $CPU = $script:DEFAULT_CPU
+}
+if (-not $PSBoundParameters.ContainsKey('VHDFolder')) {
+    $VHDFolder = $script:DEFAULT_VHD_FOLDER
+}
+if (-not $PSBoundParameters.ContainsKey('VMUsername')) {
+    $VMUsername = $script:DEFAULT_VM_USERNAME
+}
+if (-not $PSBoundParameters.ContainsKey('VMPassword')) {
+    $VMPassword = $script:DEFAULT_VM_PASSWORD
+}
+if (-not $PSBoundParameters.ContainsKey('GPUName')) {
+    $GPUName = $script:DEFAULT_GPU_NAME
+}
+
+# Override with registry settings if available
 $globalSettings = Get-GlobalSettingsFromRegistry
 if ($globalSettings) {
     if (-not $PSBoundParameters.ContainsKey('Memory') -and $globalSettings.DefaultMemory) {
@@ -94,16 +117,6 @@ if ($globalSettings) {
     }
 }
 
-# Resource limits
-$MIN_MEMORY_MB = 512
-$MAX_MEMORY_MB = 131072
-$MIN_CPU = 1
-$MAX_CPU = 64
-
-# Timeouts and retries
-$VM_HEARTBEAT_TIMEOUT_SEC = 90
-$MAX_CONFIG_RETRIES = 3
-
 #region Helper Functions
 
 function Test-InputValidation {
@@ -113,12 +126,12 @@ function Test-InputValidation {
 
     # Validate Memory
     $memoryMB = $Memory / 1MB
-    if ($memoryMB -lt $MIN_MEMORY_MB) { $errors += "Insufficient memory (minimum $MIN_MEMORY_MB MB)" }
-    if ($memoryMB -gt $MAX_MEMORY_MB) { $errors += "Memory too high (maximum $MAX_MEMORY_MB MB)" }
+    if ($memoryMB -lt $script:MIN_MEMORY_MB) { $errors += "Insufficient memory (minimum $script:MIN_MEMORY_MB MB)" }
+    if ($memoryMB -gt $script:MAX_MEMORY_MB) { $errors += "Memory too high (maximum $script:MAX_MEMORY_MB MB)" }
 
     # Validate CPU
-    if ($CPU -lt $MIN_CPU) { $errors += "CPU count must be at least $MIN_CPU" }
-    if ($CPU -gt $MAX_CPU) { $errors += "CPU count exceeds maximum ($MAX_CPU)" }
+    if ($CPU -lt $script:MIN_CPU) { $errors += "CPU count must be at least $script:MIN_CPU" }
+    if ($CPU -gt $script:MAX_CPU) { $errors += "CPU count exceeds maximum ($script:MAX_CPU)" }
 
     # Validate VHD folder path
     $parentPath = Split-Path $VHDFolder -Parent
@@ -209,22 +222,7 @@ function Initialize-NetworkSwitches {
     }
 }
 
-function Get-TemplateVHDX {
-    param(
-        [string]$VHDFolder
-    )
-
-    $templateVHDX = Join-Path $VHDFolder "template-with-gpu.vhdx"
-
-    if (-not (Test-Path $templateVHDX)) {
-        return $null
-    }
-
-    Write-Log "Using template: $templateVHDX" -Level Success
-    return $templateVHDX
-}
-
-# New-VMFromEmptyVHD and Get-NextAvailableIP are in Common.ps1
+# Get-TemplateVHDXPath, New-VMFromEmptyVHD and Get-NextAvailableIP are in Common.ps1
 
 #endregion
 
@@ -295,11 +293,11 @@ try {
             $VHDSizeGB = [int]$sizeInput
         }
 
-        if ($VHDSizeGB -lt 10) {
-            throw "VHD size must be at least 10 GB"
+        if ($VHDSizeGB -lt $script:MIN_VHD_SIZE_GB) {
+            throw "VHD size must be at least $script:MIN_VHD_SIZE_GB GB"
         }
-        if ($VHDSizeGB -gt 2048) {
-            throw "VHD size cannot exceed 2048 GB (2TB)"
+        if ($VHDSizeGB -gt $script:MAX_VHD_SIZE_GB) {
+            throw "VHD size cannot exceed $script:MAX_VHD_SIZE_GB GB ($([int]($script:MAX_VHD_SIZE_GB / 1024))TB)"
         }
 
         $vhdSizeBytes = [int64]$VHDSizeGB * 1GB
@@ -308,10 +306,10 @@ try {
     else {
         # Get template VHDX (must already exist)
         Write-Host ""
-        $templateVHDX = Get-TemplateVHDX -VHDFolder $VHDFolder
+        $templateVHDX = Get-TemplateVHDXPath -VHDFolder $VHDFolder
 
         if (-not $templateVHDX) {
-            $expectedPath = Join-Path $VHDFolder "template-with-gpu.vhdx"
+            $expectedPath = Get-ExpectedTemplatePath -VHDFolder $VHDFolder
             Write-Log "Template VHDX not found: $expectedPath" -Level Warning
             Write-Host ""
             Write-Host "Do you want to create an empty VHD? (Y/N): " -NoNewline -ForegroundColor Cyan
@@ -322,11 +320,11 @@ try {
                 Write-Host "Size (GB): " -NoNewline -ForegroundColor Cyan
                 $VHDSizeGB = [int](Read-Host)
 
-                if ($VHDSizeGB -lt 10) {
-                    throw "VHD size must be at least 10 GB"
+                if ($VHDSizeGB -lt $script:MIN_VHD_SIZE_GB) {
+                    throw "VHD size must be at least $script:MIN_VHD_SIZE_GB GB"
                 }
-                if ($VHDSizeGB -gt 2048) {
-                    throw "VHD size cannot exceed 2048 GB (2TB)"
+                if ($VHDSizeGB -gt $script:MAX_VHD_SIZE_GB) {
+                    throw "VHD size cannot exceed $script:MAX_VHD_SIZE_GB GB ($([int]($script:MAX_VHD_SIZE_GB / 1024))TB)"
                 }
 
                 $vhdSizeBytes = [int64]$VHDSizeGB * 1GB
@@ -405,7 +403,7 @@ try {
         $configured = $false
 
         if ($vmStarted) {
-            $heartbeatReady = Wait-VMHeartbeat -VMName $VMName -TimeoutSeconds $VM_HEARTBEAT_TIMEOUT_SEC
+            $heartbeatReady = Wait-VMHeartbeat -VMName $VMName -TimeoutSeconds $script:VM_HEARTBEAT_TIMEOUT_SEC
 
             if ($heartbeatReady) {
                 $configured = Configure-VMNetwork -VMName $VMName `
@@ -413,7 +411,7 @@ try {
                                                  -Hostname $hostname `
                                                  -Credential $VMCredential `
                                                  -InternalMAC $vmResult.InternalMAC `
-                                                 -MaxRetries $MAX_CONFIG_RETRIES
+                                                 -MaxRetries $script:MAX_CONFIG_RETRIES
             }
         }
 
@@ -458,9 +456,9 @@ try {
     Write-Host "  Configured: $(if ($configured) { 'Yes' } else { 'No' })" -ForegroundColor $(if ($configured) { 'Green' } else { 'Yellow' })
     Write-Host ""
     Write-Log "Network Configuration:" -Level Info
-    Write-Host "  External Switch: External (Internet via DHCP)" -ForegroundColor Gray
-    Write-Host "  Internal Switch: Internal (Host-only 10.0.0.0/24)" -ForegroundColor Gray
-    Write-Host "  Host IP: 10.0.0.1" -ForegroundColor Gray
+    Write-Host "  External Switch: $script:ExternalSwitch (Internet via DHCP)" -ForegroundColor Gray
+    Write-Host "  Internal Switch: $script:InternalSwitch (Host-only 10.0.0.0/24)" -ForegroundColor Gray
+    Write-Host "  Host IP: $script:HostIP" -ForegroundColor Gray
     Write-Host ""
     Write-Log "State stored in registry: $script:RegistryInstancesPath\$VMName" -Level Info
     Write-Host ""
