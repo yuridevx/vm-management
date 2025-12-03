@@ -431,11 +431,11 @@ function Get-AllVMInstancesFromRegistry {
             }
         }
 
-        return $instances
+        return ,$instances
     }
     catch {
         Write-Log "Failed to enumerate VM instances from registry: $($_.Exception.Message)" -Level Error
-        return @()
+        return ,@()
     }
 }
 
