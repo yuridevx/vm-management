@@ -106,7 +106,7 @@ try {
 
         foreach ($vm in $registryVMs) {
             # Get current Hyper-V state
-            $hvVM = $hyperVVMs | Where-Object { $_.VMId.Guid -eq $vm.ID }
+            $hvVM = $hyperVVMs | Where-Object { Test-GuidMatch $_.VMId.Guid $vm.ID }
             $state = "NOT FOUND"
             $stateColor = "Red"
 

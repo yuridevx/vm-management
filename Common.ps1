@@ -30,6 +30,29 @@ $script:RegistryInstancesPath = "HKLM:\SOFTWARE\HyperV-VMM\Instances"
 
 # TP-Link OUI prefixes for MAC addresses
 $script:TpLinkPrefixes = @('00-27-19','00-1F-3F','00-1D-0F','00-22-B0','00-23-CD','00-25-86','00-25-C5','00-27-A4','10-FE-ED','14-CF-92','18-0F-76','1C-3B-F3','20-76-00','20-E2-8A','24-A4-3C','28-2C-B2','30-B5-C2','30-FC-68','34-EA-E7','3C-84-6A','40-16-7E','44-00-4D','44-D6-E3','48-5B-39','4C-ED-FB','50-3E-AA','50-C7-BF','54-AF-97','5C-E9-31','60-32-B1','60-E3-27','64-66-B3','68-1C-A2','6C-5A-B0','70-4F-57','74-DA-88','78-44-76','7C-8B-CA','80-EA-07','84-16-F9','88-1D-FC','8C-15-C7','8C-FE-57','90-6F-18','90-F6-52','94-0C-6D','98-25-4A','98-DE-D0','9C-A2-F4','A0-63-91','A0-F3-C1','A4-2B-B0','A8-5E-45','AC-15-A2','AC-84-C6','B0-4E-26','B0-95-75','B4-B0-24','B8-27-EB','BC-46-99','C0-25-E9','C4-6E-1F','C8-0E-14','C8-3A-35','C8-D7-19','CC-32-E5','D0-76-8F','D4-6E-0E','D8-0D-17','DC-15-C8','E0-28-6D','E4-9A-79','E8-48-B8','E8-94-F6','EC-08-6B','F0-D1-A9','F4-28-53','F4-6D-04','F4-EC-38','F4-F2-6D','F8-1A-67','FC-EC-DA')
+
+function Test-GuidMatch {
+    <#
+    .SYNOPSIS
+        Compares two GUIDs case-insensitively
+    .PARAMETER Guid1
+        First GUID string
+    .PARAMETER Guid2
+        Second GUID string
+    .OUTPUTS
+        Boolean - True if GUIDs match (case-insensitive)
+    #>
+    param(
+        [string]$Guid1,
+        [string]$Guid2
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Guid1) -or [string]::IsNullOrWhiteSpace($Guid2)) {
+        return $false
+    }
+
+    return $Guid1 -ieq $Guid2
+}
 #endregion
 
 #region Script Initialization Functions
@@ -201,7 +224,7 @@ function Get-VMInstanceByID {
     )
 
     # Get VM from Hyper-V
-    $vm = Get-VM | Where-Object { $_.VMId.Guid -eq $VMID }
+    $vm = Get-VM | Where-Object { Test-GuidMatch $_.VMId.Guid $VMID }
     if (-not $vm) {
         return $null
     }
@@ -545,7 +568,16 @@ function Get-OrphanedVMInstances {
 
     $orphanedEntries = @()
     foreach ($regVM in $RegistryVMs) {
-        $hvVM = $HyperVVMs | Where-Object { $_.VMId.Guid -eq $regVM.ID }
+        # Skip entries with no ID
+        if ([string]::IsNullOrWhiteSpace($regVM.ID)) {
+            $orphanedEntries += $regVM
+            continue
+        }
+
+        # Compare by GUID or by Name as fallback
+        $hvVM = $HyperVVMs | Where-Object {
+            (Test-GuidMatch $_.VMId.Guid $regVM.ID) -or $_.Name -eq $regVM.Name
+        }
         if (-not $hvVM) {
             $orphanedEntries += $regVM
         }
@@ -573,7 +605,7 @@ function Get-UnmanagedVMs {
 
     $unmanagedVMs = @()
     foreach ($vm in $HyperVVMs) {
-        $isManaged = $RegistryVMs | Where-Object { $_.ID -eq $vm.VMId.Guid }
+        $isManaged = $RegistryVMs | Where-Object { Test-GuidMatch $_.ID $vm.VMId.Guid }
         if (-not $isManaged) {
             $unmanagedVMs += $vm
         }

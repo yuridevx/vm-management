@@ -192,7 +192,7 @@ try {
     $oldVMGuid = $vmData.ID
 
     # Remove old registry entry if GUID changed
-    if ($oldVMGuid -and $oldVMGuid -ne $newVMGuid) {
+    if ($oldVMGuid -and -not (Test-GuidMatch $oldVMGuid $newVMGuid)) {
         Remove-VMInstanceFromRegistry -VMID $oldVMGuid | Out-Null
     }
 
