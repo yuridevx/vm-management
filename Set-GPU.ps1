@@ -158,28 +158,33 @@ try {
     Write-Host ""
     Write-Log "Reconfiguring GPU partition adapter..." -Level Info
 
-    $existingAdapter = Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue
-    $hadExistingAdapter = $null -ne $existingAdapter
+    $existingAdapters = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue)
+    $hadExistingAdapter = $existingAdapters.Count -gt 0
+    $previousInstancePath = if ($hadExistingAdapter) { $existingAdapters[0].InstancePath } else { $null }
 
     try {
-        # Step 1: Remove existing adapter if present
+        # Step 1: Remove ALL existing adapters (ensure only 1 GPU)
         if ($hadExistingAdapter) {
-            Write-Log "Removing existing GPU partition adapter..." -Level Info
-            Remove-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-            Write-Log "Existing GPU partition adapter removed" -Level Success
+            Write-Log "Removing existing GPU partition adapter(s)..." -Level Info
+            $existingAdapters | Remove-VMGpuPartitionAdapter -ErrorAction Stop
+            Write-Log "Existing GPU partition adapter(s) removed" -Level Success
         }
 
-        # Step 2: Add new GPU partition adapter
+        # Step 2: Add new GPU partition adapter with specific GPU assignment
         Write-Log "Adding new GPU partition adapter..." -Level Info
-        Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-        Write-Log "GPU partition adapter added" -Level Success
+        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $selectedGPU.InstancePath -ErrorAction Stop
+        Write-Log "GPU partition adapter added with GPU: $($selectedGPU.FriendlyName)" -Level Success
     }
     catch {
         # Rollback: Try to restore adapter if we removed it but failed to add new one
         if ($hadExistingAdapter) {
             Write-Log "GPU swap failed, attempting to restore previous adapter..." -Level Warning
             try {
-                Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+                if ($previousInstancePath) {
+                    Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $previousInstancePath -ErrorAction Stop
+                } else {
+                    Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+                }
                 Write-Log "Previous GPU adapter restored" -Level Warning
             }
             catch {

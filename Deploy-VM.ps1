@@ -308,9 +308,15 @@ function New-VMFromEmptyVHD {
         Write-Log "$switchName adapter MAC: $mac"
     }
 
-    # Add GPU partition adapter
-    Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-    Write-Log "VM '$VMName' created with GPU partition adapter" -Level Success
+    # Add GPU partition adapter with specific GPU assignment (ensure only 1 GPU)
+    Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Remove-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath)) {
+        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $GPUInstancePath -ErrorAction Stop
+        Write-Log "VM '$VMName' created with GPU: $GPUInstancePath" -Level Success
+    } else {
+        Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+        Write-Log "VM '$VMName' created with GPU partition adapter (no specific GPU assigned)" -Level Warning
+    }
 
     # Get assigned MAC addresses
     $adapters = Get-VMNetworkAdapter -VMName $VMName
