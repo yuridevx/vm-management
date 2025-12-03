@@ -50,47 +50,11 @@ param(
 # Load shared functions
 . "$PSScriptRoot\Common.ps1"
 
-#region Helper Functions
-
-function Get-UnmanagedVMs {
-    <#
-    .SYNOPSIS
-        Gets list of Hyper-V VMs not in our registry
-    #>
-    $allHyperVVMs = Get-VM -ErrorAction SilentlyContinue
-    $managedVMs = Get-AllVMInstancesFromRegistry
-
-    $unmanagedVMs = @()
-    foreach ($vm in $allHyperVVMs) {
-        $isManaged = $managedVMs | Where-Object { $_.Name -eq $vm.Name }
-        if (-not $isManaged) {
-            $unmanagedVMs += $vm
-        }
-    }
-
-    return $unmanagedVMs
-}
-
-# Get-NextAvailableIP is now in Common.ps1
-
-#endregion
-
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Import Existing VM" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    # Check if running as administrator
-    Test-AdministratorPrivileges
-
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder "C:\VMs"
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
+    Write-ScriptHeader -Title "Import Existing VM"
+    $LogFile = Initialize-Script -LogFile $LogFile
 
     # Get VM to import
     $targetVM = $null
@@ -224,56 +188,40 @@ try {
         }
     }
 
-    # Warn about missing network setup
+    # Auto-fix missing network adapters
     if (-not $hasExternalSwitch -or -not $hasInternalSwitch) {
         Write-Host ""
-        Write-Host "WARNING: VM is missing required network adapters!" -ForegroundColor Yellow
+        Write-Log "VM is missing required network adapters - will add them now" -Level Warning
+
+        # Check VM is stopped
+        if ($targetVM.State -ne 'Off') {
+            Write-Log "Stopping VM to add network adapters..." -Level Warning
+            Stop-VM -Name $VMName -Force -ErrorAction Stop
+            Start-Sleep -Seconds 2
+        }
+
+        # Add missing External adapter
         if (-not $hasExternalSwitch) {
-            Write-Host "  - Missing: External switch adapter" -ForegroundColor Yellow
+            if (Get-VMSwitch -Name $script:ExternalSwitch -ErrorAction SilentlyContinue) {
+                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:ExternalSwitch -Name $script:ExternalSwitch
+                $externalMAC = Set-VMStaticMac -VMName $VMName -SwitchName $script:ExternalSwitch -Force
+                Write-Log "Added External adapter with MAC: $externalMAC" -Level Success
+            }
+            else {
+                Write-Log "External switch does not exist. Run Deploy-VM.ps1 first." -Level Warning
+            }
         }
+
+        # Add missing Internal adapter
         if (-not $hasInternalSwitch) {
-            Write-Host "  - Missing: Internal switch adapter" -ForegroundColor Yellow
-        }
-        Write-Host ""
-        Write-Host "Network configuration (Set-Network.ps1) requires both adapters." -ForegroundColor Gray
-        Write-Host ""
-
-        $setupNetwork = Read-Host "Add missing network adapters now? (Y/N)"
-        if ($setupNetwork -match '^[Yy]') {
-            # Check VM is stopped
-            if ($targetVM.State -ne 'Off') {
-                Write-Log "Stopping VM to add network adapters..." -Level Warning
-                Stop-VM -Name $VMName -Force -ErrorAction Stop
-                Start-Sleep -Seconds 2
-            }
-
-            # Ensure switches exist
-            if (-not (Get-VMSwitch -Name $script:ExternalSwitch -ErrorAction SilentlyContinue)) {
-                Write-Log "External switch '$($script:ExternalSwitch)' does not exist. Create it first using Deploy-VM.ps1" -Level Error
+            if (Get-VMSwitch -Name $script:InternalSwitch -ErrorAction SilentlyContinue) {
+                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:InternalSwitch -Name $script:InternalSwitch
+                $internalMAC = Set-VMStaticMac -VMName $VMName -SwitchName $script:InternalSwitch -Force
+                Write-Log "Added Internal adapter with MAC: $internalMAC" -Level Success
             }
             else {
-                if (-not $hasExternalSwitch) {
-                    Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:ExternalSwitch -Name $script:ExternalSwitch
-                    $mac = Set-VMStaticMac -VMName $VMName -SwitchName $script:ExternalSwitch -Force
-                    $externalMAC = $mac
-                    Write-Log "Added External adapter with MAC: $mac" -Level Success
-                }
+                Write-Log "Internal switch does not exist. Run Deploy-VM.ps1 first." -Level Warning
             }
-
-            if (-not (Get-VMSwitch -Name $script:InternalSwitch -ErrorAction SilentlyContinue)) {
-                Write-Log "Internal switch '$($script:InternalSwitch)' does not exist. Create it first using Deploy-VM.ps1" -Level Error
-            }
-            else {
-                if (-not $hasInternalSwitch) {
-                    Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:InternalSwitch -Name $script:InternalSwitch
-                    $mac = Set-VMStaticMac -VMName $VMName -SwitchName $script:InternalSwitch -Force
-                    $internalMAC = $mac
-                    Write-Log "Added Internal adapter with MAC: $mac" -Level Success
-                }
-            }
-        }
-        else {
-            Write-Log "Skipping network adapter setup. Set-Network.ps1 will not work." -Level Warning
         }
     }
 
@@ -293,68 +241,9 @@ try {
         Write-Log "Using specified IP: $InternalIP" -Level Info
     }
 
-    # Detect GPUs and assign
+    # Show available GPUs (actual assignment done via Set-GPU.ps1)
     Write-Host ""
-    Write-Log "Detecting available GPUs..." -Level Info
-    $availableGPUs = Get-AllAvailableGPUs
-    $assignedGPU = ""
-    $gpuName = ""
-
-    if ($availableGPUs.Count -gt 0) {
-        Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
-        foreach ($gpu in $availableGPUs) {
-            Write-Log "  - $($gpu.FriendlyName)"
-        }
-
-        if ($availableGPUs.Count -eq 1) {
-            $assignedGPU = $availableGPUs[0].InstancePath
-            $gpuName = $availableGPUs[0].FriendlyName
-            Write-Log "Auto-assigned GPU: $gpuName" -Level Info
-        }
-        else {
-            Write-Host ""
-            Write-Host "Select GPU to assign:" -ForegroundColor Yellow
-            for ($i = 0; $i -lt $availableGPUs.Count; $i++) {
-                Write-Host "  $($i+1). $($availableGPUs[$i].FriendlyName)"
-            }
-            Write-Host "  0. Skip GPU assignment"
-            Write-Host ""
-
-            $gpuSel = Read-Host "Select GPU (0-$($availableGPUs.Count))"
-            $gpuIndex = -1
-            if ($gpuSel -match '^\d+$') {
-                $gpuIndex = [int]$gpuSel - 1
-            }
-
-            if ($gpuIndex -ge 0 -and $gpuIndex -lt $availableGPUs.Count) {
-                $assignedGPU = $availableGPUs[$gpuIndex].InstancePath
-                $gpuName = $availableGPUs[$gpuIndex].FriendlyName
-            }
-        }
-    }
-    else {
-        Write-Log "No GPUs detected" -Level Warning
-    }
-
-    # Show import plan
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "  Import Plan" -ForegroundColor Yellow
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "VM Name: $VMName" -ForegroundColor White
-    Write-Host "VHD Path: $vhdPath" -ForegroundColor Gray
-    Write-Host "Memory: $([Math]::Round($vmMemory / 1MB, 0)) MB" -ForegroundColor Gray
-    Write-Host "CPUs: $vmCPU" -ForegroundColor Gray
-    Write-Host "Internal IP: $InternalIP" -ForegroundColor Gray
-    Write-Host "GPU: $(if ($gpuName) { $gpuName } else { '(none)' })" -ForegroundColor $(if ($gpuName) { 'Cyan' } else { 'Gray' })
-    Write-Host "(MACs and hostname will be generated on first Set-Network run)" -ForegroundColor DarkGray
-    Write-Host ""
-
-    $confirm = Read-Host "Import this VM to registry? (Y/N)"
-    if ($confirm -notmatch '^[Yy]') {
-        Write-Log "Import cancelled by user" -Level Warning
-        exit 0
-    }
+    Show-AvailableGPUs | Out-Null
 
     # Save to registry
     Write-Host ""

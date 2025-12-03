@@ -66,26 +66,14 @@ $MAX_CONFIG_RETRIES = 3
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  VM Recreation Script" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-ScriptHeader -Title "VM Recreation Script"
+    $LogFile = Initialize-Script -LogFile $LogFile
 
-    # Check if running as administrator
-    Test-AdministratorPrivileges
-
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder "C:\VMs"
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
-
-    # Check if VM exists in registry
+    # Get VM from registry (don't require Hyper-V existence - we're recreating it)
     $vmData = Get-VMInstanceFromRegistry -VMName $VMName
     if (-not $vmData) {
         throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
     }
-
     Write-Log "Found VM in registry: $VMName" -Level Success
 
     # Get global settings for template path
@@ -119,29 +107,15 @@ try {
     }
 
     # Detect GPUs
-    Write-Log "Detecting available GPUs..." -Level Info
-    $availableGPUs = Get-AllAvailableGPUs
-    Write-Log "Found $($availableGPUs.Count) GPU(s)" -Level Success
+    $availableGPUs = Show-AvailableGPUs
 
     # Show recreation plan
     Write-Host ""
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "  Recreation Plan" -ForegroundColor Yellow
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "VM Name: $VMName" -ForegroundColor White
-    Write-Host "VHD Path: $($vmData.VHDPath)" -ForegroundColor Gray
-    Write-Host "Memory: $($memoryToUse / 1MB) MB" -ForegroundColor Gray
-    Write-Host "CPUs: $cpuToUse" -ForegroundColor Gray
-    Write-Host "IP: $($vmData.InternalIP)" -ForegroundColor Gray
-    Write-Host "Template: $templateVHDX" -ForegroundColor Gray
-    Write-Host "(New MACs and hostname will be generated)" -ForegroundColor DarkGray
-    Write-Host ""
+    Write-Host "Recreation: $VMName (Memory: $($memoryToUse / 1MB)MB, CPUs: $cpuToUse)" -ForegroundColor Yellow
     Write-Host "WARNING: This will DELETE and RECREATE the VM!" -ForegroundColor Red
     Write-Host ""
 
-    $confirm = Read-Host "Continue with recreation? (Y/N)"
-    if ($confirm -notmatch '^[Yy]') {
-        Write-Log "Recreation cancelled by user" -Level Warning
+    if (-not (Request-UserConfirmation -Message "Continue with recreation?" -CancelMessage "Recreation cancelled by user")) {
         exit 0
     }
 

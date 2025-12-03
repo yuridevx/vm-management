@@ -58,19 +58,8 @@ param(
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  GPU Driver Update Script" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    # Check if running as administrator
-    Test-AdministratorPrivileges
-
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder $VHDFolder
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
+    Write-ScriptHeader -Title "GPU Driver Update Script"
+    $LogFile = Initialize-Script -LogFile $LogFile -DefaultLogFolder $VHDFolder
 
     # Validate parameters
     $paramCount = @($TemplateOnly, (-not [string]::IsNullOrWhiteSpace($VMName)), $AllVMs) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
@@ -100,12 +89,7 @@ try {
     }
 
     # Detect GPUs
-    Write-Log "Detecting available GPUs..." -Level Info
-    $availableGPUs = Get-AllAvailableGPUs
-    Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
-    foreach ($gpu in $availableGPUs) {
-        Write-Log "  - $($gpu.FriendlyName)"
-    }
+    $availableGPUs = Show-AvailableGPUs
     Write-Host ""
 
     # Get global settings

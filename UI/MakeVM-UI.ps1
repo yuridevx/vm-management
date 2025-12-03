@@ -11,6 +11,9 @@ function Get-GpuInfo {
     if ($Name -eq 'AUTO') {
         $pg = Get-CimInstance -Namespace 'ROOT\virtualization\v2' -ClassName Msvm_PartitionableGpu |
               Select-Object -First 1
+        if (-not $pg) {
+            throw "No partitionable GPU found on host."
+        }
         $dev = Get-PnpDevice |
                Where-Object {
                    $_.DeviceID -Like "*$($pg.Name.Substring(8,16))*" -and

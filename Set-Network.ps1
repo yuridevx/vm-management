@@ -71,100 +71,16 @@ param(
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  VM Network Reconfiguration" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-ScriptHeader -Title "VM Network Reconfiguration"
+    $LogFile = Initialize-Script -LogFile $LogFile
 
-    # Check if running as administrator
-    Test-AdministratorPrivileges
+    # Validate VM exists in both registry and Hyper-V
+    $vmData = Assert-VMExistsInRegistryAndHyperV -VMName $VMName
 
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder "C:\VMs"
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
-
-    # Check if VM exists in registry
-    $vmData = Get-VMInstanceFromRegistry -VMName $VMName
-    if (-not $vmData) {
-        throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
-    }
-
-    Write-Log "Found VM in registry: $VMName" -Level Success
-
-    # Check if VM exists in Hyper-V
-    if (-not (Test-VMExists -VMName $VMName)) {
-        throw "VM '$VMName' exists in registry but not in Hyper-V. The VM may have been deleted."
-    }
-
-    # Check and fix network adapters
-    Write-Log "Checking network adapter configuration..." -Level Info
-    $adapters = Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue
-    $hasInternal = $adapters | Where-Object { $_.SwitchName -eq $script:InternalSwitch }
-    $hasExternal = $adapters | Where-Object { $_.SwitchName -eq $script:ExternalSwitch }
-
-    if (-not $hasInternal -or -not $hasExternal) {
-        Write-Host ""
-        Write-Host "WARNING: VM is missing required network adapters!" -ForegroundColor Yellow
-        if (-not $hasExternal) {
-            Write-Host "  - Missing: External switch adapter" -ForegroundColor Yellow
-        }
-        if (-not $hasInternal) {
-            Write-Host "  - Missing: Internal switch adapter" -ForegroundColor Yellow
-        }
-        Write-Host ""
-
-        # Check if VM is running - need to stop it to add adapters
-        $vmState = (Get-VM -Name $VMName).State
-        if ($vmState -ne 'Off') {
-            Write-Log "VM must be stopped to add network adapters" -Level Warning
-            $stopVM = Read-Host "Stop VM to fix network adapters? (Y/N)"
-            if ($stopVM -match '^[Yy]') {
-                Stop-VM -Name $VMName -Force -ErrorAction Stop
-                Start-Sleep -Seconds 3
-            }
-            else {
-                throw "Cannot configure network without proper adapters. Stop VM and try again."
-            }
-        }
-
-        # Add missing adapters
-        if (-not $hasExternal) {
-            if (Get-VMSwitch -Name $script:ExternalSwitch -ErrorAction SilentlyContinue) {
-                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:ExternalSwitch -Name $script:ExternalSwitch
-                Write-Log "Added External adapter" -Level Success
-            }
-            else {
-                throw "External switch does not exist. Run Deploy-VM.ps1 first to create network infrastructure."
-            }
-        }
-
-        if (-not $hasInternal) {
-            if (Get-VMSwitch -Name $script:InternalSwitch -ErrorAction SilentlyContinue) {
-                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:InternalSwitch -Name $script:InternalSwitch
-                Write-Log "Added Internal adapter" -Level Success
-            }
-            else {
-                throw "Internal switch does not exist. Run Deploy-VM.ps1 first to create network infrastructure."
-            }
-        }
-
-        # Refresh adapter list
-        $adapters = Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue
-        $hasInternal = $adapters | Where-Object { $_.SwitchName -eq $script:InternalSwitch }
-        $hasExternal = $adapters | Where-Object { $_.SwitchName -eq $script:ExternalSwitch }
-        Write-Host ""
-    }
-
-    # Always generate new random TP-Link MACs and hostname
-    Write-Log "Network adapters OK" -Level Success
-    Write-Log "Generating new random MACs..." -Level Info
-    # Use switch names to ensure correct adapter identification (adapter names may not be unique)
-    $externalMac = Set-VMStaticMac -VMName $VMName -SwitchName $script:ExternalSwitch -Force
-    Write-Log "  External MAC: $externalMac" -Level Success
-    $internalMac = Set-VMStaticMac -VMName $VMName -SwitchName $script:InternalSwitch -Force
-    Write-Log "  Internal MAC: $internalMac" -Level Success
+    # Check and fix network adapters, generate new MACs
+    $macResult = Repair-VMNetworkAdapters -VMName $VMName -GenerateNewMACs
+    $externalMac = $macResult.ExternalMAC
+    $internalMac = $macResult.InternalMAC
 
     # Generate new hostname (always random) or use provided one
     $targetHostname = if ([string]::IsNullOrWhiteSpace($NewHostname)) { Get-RandomHostname } else { $NewHostname }
@@ -186,17 +102,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Reconfiguration Plan:" -ForegroundColor Yellow
-    Write-Host "  VM Name: $VMName" -ForegroundColor White
-    Write-Host "  Target IP: $targetIP" -ForegroundColor Gray
-    Write-Host "  Target Hostname: $targetHostname" -ForegroundColor Gray
-    Write-Host ""
-
-    $confirm = Read-Host "Continue with reconfiguration? (Y/N)"
-    if ($confirm -notmatch '^[Yy]') {
-        Write-Log "Reconfiguration cancelled by user" -Level Warning
-        exit 0
-    }
+    Write-Log "Reconfiguring: IP=$targetIP, Hostname=$targetHostname" -Level Info
 
     # Create credential object
     $credential = New-VMCredential -Username $VMUsername -Password $VMPassword

@@ -34,6 +34,7 @@ param(
 #region Main
 
 try {
+    Write-ScriptHeader -Title "Clear VMM Registry Data"
     Test-AdministratorPrivileges
 
     $registryPath = "HKLM:\SOFTWARE\HyperV-VMM"
@@ -52,11 +53,6 @@ try {
     }
 
     # Show what will be deleted
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "  Clear VMM Registry Data" -ForegroundColor Yellow
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host ""
     Write-Host "This will remove:" -ForegroundColor White
     Write-Host "  - $vmCount VM instance record(s)" -ForegroundColor Gray
     Write-Host "  - Global settings (template paths, defaults)" -ForegroundColor Gray
@@ -69,9 +65,7 @@ try {
 
     # Confirm unless forced
     if (-not $Force) {
-        $confirm = Read-Host "Are you sure you want to clear all registry data? (Y/N)"
-        if ($confirm -notmatch '^[Yy]') {
-            Write-Host "Cancelled." -ForegroundColor Yellow
+        if (-not (Request-UserConfirmation -Message "Clear all registry data?" -CancelMessage "Cancelled")) {
             exit 0
         }
     }

@@ -47,32 +47,11 @@ param(
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  GPU Assignment Reconfiguration" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-ScriptHeader -Title "GPU Assignment Reconfiguration"
+    $LogFile = Initialize-Script -LogFile $LogFile
 
-    # Check if running as administrator
-    Test-AdministratorPrivileges
-
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder "C:\VMs"
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
-
-    # Check if VM exists in registry
-    $vmData = Get-VMInstanceFromRegistry -VMName $VMName
-    if (-not $vmData) {
-        throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
-    }
-
-    Write-Log "Found VM in registry: $VMName" -Level Success
-
-    # Check if VM exists in Hyper-V
-    if (-not (Test-VMExists -VMName $VMName)) {
-        throw "VM '$VMName' exists in registry but not in Hyper-V. The VM may have been deleted."
-    }
+    # Validate VM exists in both registry and Hyper-V
+    $vmData = Assert-VMExistsInRegistryAndHyperV -VMName $VMName
 
     # Check VM is stopped
     $vmState = Get-VMCurrentState -VMName $VMName
@@ -93,12 +72,7 @@ try {
     Write-Host ""
 
     # Detect available GPUs
-    Write-Log "Detecting available GPUs..." -Level Info
-    $availableGPUs = Get-AllAvailableGPUs
-    Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
-    foreach ($gpu in $availableGPUs) {
-        Write-Log "  - $($gpu.FriendlyName)"
-    }
+    $availableGPUs = Show-AvailableGPUs
     Write-Host ""
 
     # Select GPU
@@ -142,17 +116,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "GPU Assignment Plan:" -ForegroundColor Yellow
-    Write-Host "  VM: $VMName" -ForegroundColor White
-    Write-Host "  Old GPU: $($vmData.GPUName)" -ForegroundColor Gray
-    Write-Host "  New GPU: $($selectedGPU.FriendlyName)" -ForegroundColor Cyan
-    Write-Host ""
-
-    $confirm = Read-Host "Continue with GPU reassignment? (Y/N)"
-    if ($confirm -notmatch '^[Yy]') {
-        Write-Log "GPU reassignment cancelled by user" -Level Warning
-        exit 0
-    }
+    Write-Log "Reassigning GPU: $($vmData.GPUName) -> $($selectedGPU.FriendlyName)" -Level Info
 
     # Remove existing GPU partition adapter and add new one (atomic operation with rollback)
     Write-Host ""

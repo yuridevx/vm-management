@@ -45,11 +45,7 @@ param(
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  VMM Status" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-ScriptHeader -Title "VMM Status"
 
     # Get global settings
     $globalSettings = Get-GlobalSettingsFromRegistry
@@ -159,14 +155,8 @@ try {
         Write-Host ""
     }
 
-    # Show unmanaged VMs
-    $unmanagedVMs = @()
-    foreach ($hvVM in $hyperVVMs) {
-        $isManaged = $registryVMs | Where-Object { $_.ID -eq $hvVM.VMId.Guid }
-        if (-not $isManaged) {
-            $unmanagedVMs += $hvVM
-        }
-    }
+    # Show unmanaged VMs (VMs in Hyper-V but not in registry)
+    $unmanagedVMs = Get-UnmanagedVMs -HyperVVMs $hyperVVMs -RegistryVMs $registryVMs
 
     if ($unmanagedVMs.Count -gt 0) {
         Write-Host "Unmanaged Hyper-V VMs ($($unmanagedVMs.Count)):" -ForegroundColor Yellow
@@ -177,14 +167,8 @@ try {
         Write-Host ""
     }
 
-    # Show orphaned registry entries
-    $orphanedEntries = @()
-    foreach ($regVM in $registryVMs) {
-        $hvVM = $hyperVVMs | Where-Object { $_.VMId.Guid -eq $regVM.ID }
-        if (-not $hvVM) {
-            $orphanedEntries += $regVM
-        }
-    }
+    # Show orphaned registry entries (VMs in registry but not in Hyper-V)
+    $orphanedEntries = Get-OrphanedVMInstances -RegistryVMs $registryVMs -HyperVVMs $hyperVVMs
 
     if ($orphanedEntries.Count -gt 0) {
         Write-Host "Orphaned Registry Entries ($($orphanedEntries.Count)):" -ForegroundColor Red

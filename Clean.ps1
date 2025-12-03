@@ -51,19 +51,8 @@ param(
 #region Main Execution
 
 try {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  VMM Registry Cleanup" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
-
-    # Check if running as administrator
-    Test-AdministratorPrivileges
-
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder "C:\VMs"
-    Write-Log "Log file: $LogFile" -Level Info
-    Write-Host ""
+    Write-ScriptHeader -Title "VMM Registry Cleanup"
+    $LogFile = Initialize-Script -LogFile $LogFile
 
     # Check if registry exists
     if (-not (Test-Path $script:RegistryBasePath)) {
@@ -77,14 +66,8 @@ try {
     # Get all Hyper-V VMs
     $hyperVVMs = Get-VM -ErrorAction SilentlyContinue
 
-    # Find orphaned entries
-    $orphanedEntries = @()
-    foreach ($regVM in $registryVMs) {
-        $hvVM = $hyperVVMs | Where-Object { $_.VMId.Guid -eq $regVM.ID }
-        if (-not $hvVM) {
-            $orphanedEntries += $regVM
-        }
-    }
+    # Find orphaned entries (VMs in registry but not in Hyper-V)
+    $orphanedEntries = Get-OrphanedVMInstances -RegistryVMs $registryVMs -HyperVVMs $hyperVVMs
 
     # Show current state
     Write-Host "Current State:" -ForegroundColor Yellow
@@ -148,14 +131,7 @@ try {
     }
 
     if (-not $OrphanedOnly -and -not $Force) {
-        Write-Host "Options:" -ForegroundColor Yellow
-        Write-Host "  1. Remove orphaned entries only ($($orphanedEntries.Count) entries)"
-        Write-Host "  2. Cancel"
-        Write-Host ""
-
-        $choice = Read-Host "Select option (1-2)"
-        if ($choice -ne "1") {
-            Write-Log "Cleanup cancelled by user" -Level Warning
+        if (-not (Request-UserConfirmation -Message "Remove $($orphanedEntries.Count) orphaned entries?" -CancelMessage "Cleanup cancelled by user")) {
             exit 0
         }
     }

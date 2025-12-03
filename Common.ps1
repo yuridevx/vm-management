@@ -32,6 +32,66 @@ $script:RegistryInstancesPath = "HKLM:\SOFTWARE\HyperV-VMM\Instances"
 $script:TpLinkPrefixes = @('00-27-19','00-1F-3F','00-1D-0F','00-22-B0','00-23-CD','00-25-86','00-25-C5','00-27-A4','10-FE-ED','14-CF-92','18-0F-76','1C-3B-F3','20-76-00','20-E2-8A','24-A4-3C','28-2C-B2','30-B5-C2','30-FC-68','34-EA-E7','3C-84-6A','40-16-7E','44-00-4D','44-D6-E3','48-5B-39','4C-ED-FB','50-3E-AA','50-C7-BF','54-AF-97','5C-E9-31','60-32-B1','60-E3-27','64-66-B3','68-1C-A2','6C-5A-B0','70-4F-57','74-DA-88','78-44-76','7C-8B-CA','80-EA-07','84-16-F9','88-1D-FC','8C-15-C7','8C-FE-57','90-6F-18','90-F6-52','94-0C-6D','98-25-4A','98-DE-D0','9C-A2-F4','A0-63-91','A0-F3-C1','A4-2B-B0','A8-5E-45','AC-15-A2','AC-84-C6','B0-4E-26','B0-95-75','B4-B0-24','B8-27-EB','BC-46-99','C0-25-E9','C4-6E-1F','C8-0E-14','C8-3A-35','C8-D7-19','CC-32-E5','D0-76-8F','D4-6E-0E','D8-0D-17','DC-15-C8','E0-28-6D','E4-9A-79','E8-48-B8','E8-94-F6','EC-08-6B','F0-D1-A9','F4-28-53','F4-6D-04','F4-EC-38','F4-F2-6D','F8-1A-67','FC-EC-DA')
 #endregion
 
+#region Script Initialization Functions
+
+function Write-ScriptHeader {
+    <#
+    .SYNOPSIS
+        Writes a consistent script header banner
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Title
+    )
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  $Title" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Initialize-Script {
+    <#
+    .SYNOPSIS
+        Standard script initialization: admin check, log file setup
+    .RETURNS
+        The log file path
+    #>
+    param(
+        [string]$LogFile = "",
+        [string]$DefaultLogFolder = "C:\VMs"
+    )
+
+    Test-AdministratorPrivileges
+    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder $DefaultLogFolder
+    Write-Log "Log file: $LogFile" -Level Info
+    Write-Host ""
+    return $LogFile
+}
+
+function Request-UserConfirmation {
+    <#
+    .SYNOPSIS
+        Requests user confirmation with consistent formatting
+    .RETURNS
+        $true if user confirmed, $false otherwise
+    #>
+    param(
+        [string]$Message = "Continue?",
+        [string]$CancelMessage = "Operation cancelled by user"
+    )
+
+    $confirm = Read-Host "$Message (Y/N)"
+    if ($confirm -notmatch '^[Yy]') {
+        Write-Log $CancelMessage -Level Warning
+        return $false
+    }
+    return $true
+}
+
+#endregion
+
 #region Logging Functions
 
 function Write-Log {
@@ -467,6 +527,62 @@ function Sync-VMNameInRegistry {
     return $false
 }
 
+function Get-OrphanedVMInstances {
+    <#
+    .SYNOPSIS
+        Gets VM instances that exist in registry but not in Hyper-V
+    #>
+    param(
+        [array]$RegistryVMs = @(),
+        [array]$HyperVVMs = @()
+    )
+
+    if ($RegistryVMs.Count -eq 0) {
+        $RegistryVMs = Get-AllVMInstancesFromRegistry
+    }
+    if ($HyperVVMs.Count -eq 0) {
+        $HyperVVMs = @(Get-VM -ErrorAction SilentlyContinue)
+    }
+
+    $orphanedEntries = @()
+    foreach ($regVM in $RegistryVMs) {
+        $hvVM = $HyperVVMs | Where-Object { $_.VMId.Guid -eq $regVM.ID }
+        if (-not $hvVM) {
+            $orphanedEntries += $regVM
+        }
+    }
+
+    return $orphanedEntries
+}
+
+function Get-UnmanagedVMs {
+    <#
+    .SYNOPSIS
+        Gets list of Hyper-V VMs not in our registry
+    #>
+    param(
+        [array]$HyperVVMs = @(),
+        [array]$RegistryVMs = @()
+    )
+
+    if ($HyperVVMs.Count -eq 0) {
+        $HyperVVMs = @(Get-VM -ErrorAction SilentlyContinue)
+    }
+    if ($RegistryVMs.Count -eq 0) {
+        $RegistryVMs = Get-AllVMInstancesFromRegistry
+    }
+
+    $unmanagedVMs = @()
+    foreach ($vm in $HyperVVMs) {
+        $isManaged = $RegistryVMs | Where-Object { $_.ID -eq $vm.VMId.Guid }
+        if (-not $isManaged) {
+            $unmanagedVMs += $vm
+        }
+    }
+
+    return $unmanagedVMs
+}
+
 #endregion
 
 #region Credential Management Functions
@@ -501,6 +617,122 @@ function Test-VMExists {
 
     $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
     return ($null -ne $vm)
+}
+
+function Assert-VMExistsInRegistryAndHyperV {
+    <#
+    .SYNOPSIS
+        Validates VM exists in both registry and Hyper-V, throws if not found
+    .RETURNS
+        The VM data from registry if found
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VMName
+    )
+
+    $vmData = Get-VMInstanceFromRegistry -VMName $VMName
+    if (-not $vmData) {
+        throw "VM '$VMName' not found in registry. Use Deploy-VM.ps1 to create it first."
+    }
+
+    Write-Log "Found VM in registry: $VMName" -Level Success
+
+    if (-not (Test-VMExists -VMName $VMName)) {
+        throw "VM '$VMName' exists in registry but not in Hyper-V. The VM may have been deleted."
+    }
+
+    return $vmData
+}
+
+function Repair-VMNetworkAdapters {
+    <#
+    .SYNOPSIS
+        Checks and repairs VM network adapters, ensuring Internal and External switches exist
+    .DESCRIPTION
+        If adapters are missing, prompts to add them (requires VM to be stopped).
+        Also replaces dynamic MACs with static TP-Link MACs.
+    .RETURNS
+        Hashtable with ExternalMAC and InternalMAC
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VMName,
+        [switch]$GenerateNewMACs
+    )
+
+    Write-Log "Checking network adapter configuration..." -Level Info
+    $adapters = Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue
+    $hasInternal = $adapters | Where-Object { $_.SwitchName -eq $script:InternalSwitch }
+    $hasExternal = $adapters | Where-Object { $_.SwitchName -eq $script:ExternalSwitch }
+
+    if (-not $hasInternal -or -not $hasExternal) {
+        Write-Host ""
+        Write-Host "WARNING: VM is missing required network adapters!" -ForegroundColor Yellow
+        if (-not $hasExternal) {
+            Write-Host "  - Missing: External switch adapter" -ForegroundColor Yellow
+        }
+        if (-not $hasInternal) {
+            Write-Host "  - Missing: Internal switch adapter" -ForegroundColor Yellow
+        }
+        Write-Host ""
+
+        # Check if VM is running - need to stop it to add adapters
+        $vmState = (Get-VM -Name $VMName).State
+        if ($vmState -ne 'Off') {
+            Write-Log "VM must be stopped to add network adapters" -Level Warning
+            $stopVM = Read-Host "Stop VM to fix network adapters? (Y/N)"
+            if ($stopVM -match '^[Yy]') {
+                Stop-VM -Name $VMName -Force -ErrorAction Stop
+                Start-Sleep -Seconds 3
+            }
+            else {
+                throw "Cannot configure network without proper adapters. Stop VM and try again."
+            }
+        }
+
+        # Add missing adapters
+        if (-not $hasExternal) {
+            if (Get-VMSwitch -Name $script:ExternalSwitch -ErrorAction SilentlyContinue) {
+                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:ExternalSwitch -Name $script:ExternalSwitch
+                Write-Log "Added External adapter" -Level Success
+            }
+            else {
+                throw "External switch does not exist. Run Deploy-VM.ps1 first to create network infrastructure."
+            }
+        }
+
+        if (-not $hasInternal) {
+            if (Get-VMSwitch -Name $script:InternalSwitch -ErrorAction SilentlyContinue) {
+                Add-VMNetworkAdapter -VMName $VMName -SwitchName $script:InternalSwitch -Name $script:InternalSwitch
+                Write-Log "Added Internal adapter" -Level Success
+            }
+            else {
+                throw "Internal switch does not exist. Run Deploy-VM.ps1 first to create network infrastructure."
+            }
+        }
+
+        Write-Host ""
+    }
+
+    Write-Log "Network adapters OK" -Level Success
+
+    # Generate new MACs if requested
+    $externalMac = ($adapters | Where-Object { $_.SwitchName -eq $script:ExternalSwitch }).MacAddress
+    $internalMac = ($adapters | Where-Object { $_.SwitchName -eq $script:InternalSwitch }).MacAddress
+
+    if ($GenerateNewMACs) {
+        Write-Log "Generating new random MACs..." -Level Info
+        $externalMac = Set-VMStaticMac -VMName $VMName -SwitchName $script:ExternalSwitch -Force
+        Write-Log "  External MAC: $externalMac" -Level Success
+        $internalMac = Set-VMStaticMac -VMName $VMName -SwitchName $script:InternalSwitch -Force
+        Write-Log "  Internal MAC: $internalMac" -Level Success
+    }
+
+    return @{
+        ExternalMAC = $externalMac
+        InternalMAC = $internalMac
+    }
 }
 
 function Get-VMCurrentState {
@@ -1050,6 +1282,33 @@ function Get-GpuInfo {
     }
 }
 
+function Show-AvailableGPUs {
+    <#
+    .SYNOPSIS
+        Detects and displays all available GPUs to log output
+    .RETURNS
+        Array of available GPUs
+    #>
+    param(
+        [string]$Title = "Detecting available GPUs..."
+    )
+
+    Write-Log $Title -Level Info
+    $availableGPUs = Get-AllAvailableGPUs
+
+    if ($availableGPUs.Count -eq 0) {
+        Write-Log "No GPUs detected" -Level Warning
+        return @()
+    }
+
+    Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
+    foreach ($gpu in $availableGPUs) {
+        Write-Log "  - $($gpu.FriendlyName)"
+    }
+
+    return $availableGPUs
+}
+
 function Select-GPUForVM {
     <#
     .SYNOPSIS
@@ -1126,23 +1385,27 @@ function Copy-SignedDrivers {
 
     $mods = Get-CimInstance Win32_PnPSignedDriver | Where-Object DeviceName -eq $GPUName
     foreach ($mod in $mods) {
-        $ante = "\\$Hostname\ROOT\cimv2:Win32_PnPSignedDriver.DeviceID=`"$($mod.DeviceID -replace '\\','\\\\')`""
+        $escaped = $mod.DeviceID -replace '\\','\\\\'
+        $ante = "\\$Hostname\ROOT\cimv2:Win32_PnPSignedDriver.DeviceID=`"$escaped`""
         $files = Get-CimInstance Win32_PnPSignedDriverCIMDataFile | Where-Object Antecedent -eq $ante
 
         foreach ($f in $files) {
             $path = ($f.Dependent -split '=' | Select-Object -Last 1).Trim('"') -replace '\\\\','\\'
-            $dest = if ($path -like 'C:\Windows\System32\DriverStore\*') {
-                Join-Path $DriveRoot "Windows\System32\HostDriverStore$($path.Substring('C:\Windows\System32\DriverStore'.Length))"
-            } else {
-                $path -replace 'C:', $DriveRoot
+            if ($path -like 'C:\Windows\System32\DriverStore\*') {
+                $rel = $path.Substring('C:\Windows\System32\DriverStore'.Length)
+                $dest = Join-Path $DriveRoot "Windows\System32\HostDriverStore$rel"
+                if (-not (Test-Path $dest)) {
+                    $srcDir = Split-Path $path -Parent
+                    Write-Log "Copying DriverStore folder: $srcDir -> $dest"
+                    Copy-Item $srcDir -Destination $dest -Recurse -ErrorAction Stop
+                }
             }
-
-            $destDir = Split-Path $dest -Parent
-            if (-not (Test-Path $destDir)) {
-                New-Item $destDir -ItemType Directory -Force | Out-Null
-            }
-            if (-not (Test-Path $dest)) {
-                Write-Log "Copying driver file: $path"
+            else {
+                $destDir = Split-Path ($path -replace 'C:',$DriveRoot) -Parent
+                if (-not (Test-Path $destDir)) {
+                    New-Item $destDir -ItemType Directory -Force | Out-Null
+                }
+                Write-Log "Copying file: $path -> $destDir"
                 Copy-Item $path -Destination $destDir -Force -ErrorAction Stop
             }
         }
@@ -1264,6 +1527,60 @@ function Inject-GpuDrivers {
 
 #region VM Creation Functions
 
+function Initialize-VMConfiguration {
+    <#
+    .SYNOPSIS
+        Configures VM settings, network adapters, and GPU after VM creation
+    .DESCRIPTION
+        Shared configuration logic used by New-VMFromTemplate and New-VMFromEmptyVHD
+    .RETURNS
+        Hashtable with VM, ExternalMAC, InternalMAC
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VMName,
+        [Parameter(Mandatory=$true)]
+        [int]$ProcessorCount,
+        [Parameter(Mandatory=$true)]
+        [string]$GPUInstancePath
+    )
+
+    # Configure VM settings
+    Set-VM -Name $VMName -ProcessorCount $ProcessorCount -StaticMemory `
+           -CheckpointType Disabled -GuestControlledCacheTypes $true `
+           -LowMemoryMappedIoSpace 1GB -HighMemoryMappedIoSpace 32GB -ErrorAction Stop
+    Get-VMNetworkAdapter -VMName $VMName | Remove-VMNetworkAdapter
+
+    # Add network adapters with unique random TP-Link MACs
+    foreach ($switchName in @($script:ExternalSwitch, $script:InternalSwitch)) {
+        Add-VMNetworkAdapter -VMName $VMName -SwitchName $switchName -Name $switchName
+        $mac = Set-VMStaticMac -VMName $VMName -SwitchName $switchName -Force
+        Write-Log "$switchName adapter MAC: $mac"
+    }
+
+    # Add GPU partition adapter with specific GPU assignment (ensure only 1 GPU)
+    Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Remove-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath)) {
+        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $GPUInstancePath -ErrorAction Stop
+        Write-Log "VM '$VMName' GPU assigned: $GPUInstancePath" -Level Success
+    } else {
+        Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+        Write-Log "VM '$VMName' GPU: auto-assigned" -Level Warning
+    }
+
+    # Get assigned MAC addresses
+    $vm = Get-VM -Name $VMName
+    $adapters = Get-VMNetworkAdapter -VMName $VMName
+    $externalMac = ($adapters | Where-Object { $_.Name -eq $script:ExternalSwitch }).MacAddress
+    $internalMac = ($adapters | Where-Object { $_.Name -eq $script:InternalSwitch }).MacAddress
+
+    return @{
+        VM = $vm
+        ExternalMAC = $externalMac
+        InternalMAC = $internalMac
+    }
+}
+
 function New-VMFromTemplate {
     <#
     .SYNOPSIS
@@ -1282,42 +1599,36 @@ function New-VMFromTemplate {
     Write-Log "Creating VM from template: $VMName"
     Write-Log "  Copying template: $TemplateVHDX -> $VHDPath"
     Copy-Item -Path $TemplateVHDX -Destination $VHDPath -Force
-    $vm = New-VM -Name $VMName -MemoryStartupBytes $MemoryBytes -VHDPath $VHDPath `
-                 -Generation 2 -ErrorAction Stop
+    New-VM -Name $VMName -MemoryStartupBytes $MemoryBytes -VHDPath $VHDPath `
+           -Generation 2 -ErrorAction Stop | Out-Null
 
-    # Configure VM settings
-    Set-VM -Name $VMName -ProcessorCount $ProcessorCount -StaticMemory `
-           -CheckpointType Disabled -GuestControlledCacheTypes $true `
-           -LowMemoryMappedIoSpace 3GB -HighMemoryMappedIoSpace 33GB -ErrorAction Stop
-    Get-VMNetworkAdapter -VMName $VMName | Remove-VMNetworkAdapter
+    return Initialize-VMConfiguration -VMName $VMName -ProcessorCount $ProcessorCount -GPUInstancePath $GPUInstancePath
+}
 
-    # Add network adapters with unique random TP-Link MACs
-    foreach ($switchName in @($script:ExternalSwitch, $script:InternalSwitch)) {
-        Add-VMNetworkAdapter -VMName $VMName -SwitchName $switchName -Name $switchName
-        $mac = Set-VMStaticMac -VMName $VMName -SwitchName $switchName -Force
-        Write-Log "$switchName adapter MAC: $mac"
-    }
+function New-VMFromEmptyVHD {
+    <#
+    .SYNOPSIS
+        Creates a new VM with an empty VHD (for manual OS installation)
+    #>
+    param(
+        [string]$VMName,
+        [string]$VHDPath,
+        [int64]$VHDSizeBytes,
+        [int64]$MemoryBytes,
+        [int]$ProcessorCount,
+        [string]$GPUInstancePath
+    )
 
-    # Add GPU partition adapter with specific GPU assignment (ensure only 1 GPU)
-    Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Remove-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
-    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath)) {
-        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $GPUInstancePath -ErrorAction Stop
-        Write-Log "VM '$VMName' created with GPU: $GPUInstancePath" -Level Success
-    } else {
-        Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-        Write-Log "VM '$VMName' created with GPU partition adapter (no specific GPU assigned)" -Level Warning
-    }
+    # Create empty VHD
+    Write-Log "Creating empty VHD: $VHDPath ($([Math]::Round($VHDSizeBytes/1GB, 2)) GB)"
+    New-VHD -Path $VHDPath -SizeBytes $VHDSizeBytes -Dynamic | Out-Null
 
-    # Get assigned MAC addresses
-    $adapters = Get-VMNetworkAdapter -VMName $VMName
-    $externalMac = ($adapters | Where-Object { $_.Name -eq $script:ExternalSwitch }).MacAddress
-    $internalMac = ($adapters | Where-Object { $_.Name -eq $script:InternalSwitch }).MacAddress
+    # Create VM
+    Write-Log "Creating VM: $VMName"
+    New-VM -Name $VMName -MemoryStartupBytes $MemoryBytes -VHDPath $VHDPath `
+           -Generation 2 -ErrorAction Stop | Out-Null
 
-    return @{
-        VM = $vm
-        ExternalMAC = $externalMac
-        InternalMAC = $internalMac
-    }
+    return Initialize-VMConfiguration -VMName $VMName -ProcessorCount $ProcessorCount -GPUInstancePath $GPUInstancePath
 }
 
 #endregion

@@ -250,106 +250,20 @@ function Initialize-TemplateVHDX {
     return $templateVHDX
 }
 
-function New-EmptyVHDX {
-    <#
-    .SYNOPSIS
-        Creates an empty VHDX file for VM creation
-    #>
-    param(
-        [string]$VHDPath,
-        [int64]$SizeBytes
-    )
-
-    Write-Log "Creating empty VHDX: $VHDPath ($([Math]::Round($SizeBytes/1GB, 2)) GB)" -Level Info
-
-    # Create dynamic VHDX
-    New-VHD -Path $VHDPath -SizeBytes $SizeBytes -Dynamic | Out-Null
-
-    if (-not (Test-Path $VHDPath)) {
-        throw "Failed to create empty VHDX"
-    }
-
-    Write-Log "Empty VHDX created successfully" -Level Success
-    return $VHDPath
-}
-
-function New-VMFromEmptyVHD {
-    <#
-    .SYNOPSIS
-        Creates a new VM with an empty VHD (no template, no GPU driver injection)
-    #>
-    param(
-        [string]$VMName,
-        [string]$VHDPath,
-        [int64]$VHDSizeBytes,
-        [int64]$MemoryBytes,
-        [int]$ProcessorCount,
-        [string]$GPUInstancePath
-    )
-
-    # Create empty VHD
-    New-EmptyVHDX -VHDPath $VHDPath -SizeBytes $VHDSizeBytes
-
-    # Create VM
-    Write-Log "Creating VM: $VMName"
-    $vm = New-VM -Name $VMName -MemoryStartupBytes $MemoryBytes -VHDPath $VHDPath `
-                 -Generation 2 -ErrorAction Stop
-
-    # Configure VM settings
-    Set-VM -Name $VMName -ProcessorCount $ProcessorCount -StaticMemory `
-           -CheckpointType Disabled -GuestControlledCacheTypes $true `
-           -LowMemoryMappedIoSpace 3GB -HighMemoryMappedIoSpace 33GB -ErrorAction Stop
-    Get-VMNetworkAdapter -VMName $VMName | Remove-VMNetworkAdapter
-
-    # Add network adapters with unique random TP-Link MACs
-    foreach ($switchName in @($script:ExternalSwitch, $script:InternalSwitch)) {
-        Add-VMNetworkAdapter -VMName $VMName -SwitchName $switchName -Name $switchName
-        $mac = Set-VMStaticMac -VMName $VMName -SwitchName $switchName -Force
-        Write-Log "$switchName adapter MAC: $mac"
-    }
-
-    # Add GPU partition adapter with specific GPU assignment (ensure only 1 GPU)
-    Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Remove-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
-    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath)) {
-        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $GPUInstancePath -ErrorAction Stop
-        Write-Log "VM '$VMName' created with GPU: $GPUInstancePath" -Level Success
-    } else {
-        Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-        Write-Log "VM '$VMName' created with GPU partition adapter (no specific GPU assigned)" -Level Warning
-    }
-
-    # Get assigned MAC addresses
-    $adapters = Get-VMNetworkAdapter -VMName $VMName
-    $externalMac = ($adapters | Where-Object { $_.Name -eq $script:ExternalSwitch }).MacAddress
-    $internalMac = ($adapters | Where-Object { $_.Name -eq $script:InternalSwitch }).MacAddress
-
-    return @{
-        VM = $vm
-        ExternalMAC = $externalMac
-        InternalMAC = $internalMac
-    }
-}
-
-# Get-NextAvailableIP is now in Common.ps1
+# New-VMFromEmptyVHD and Get-NextAvailableIP are in Common.ps1
 
 #endregion
 
 #region Main Execution
 
 try {
-    Write-Host "`n========================================" -ForegroundColor Cyan
-    Write-Host "  Hyper-V Single VM Deployment" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+    Write-ScriptHeader -Title "Hyper-V Single VM Deployment"
 
     # Check prerequisites
     Test-Prerequisites
     Write-Host ""
 
-    # Initialize log file
-    $LogFile = Initialize-LogFile -LogFile $LogFile -DefaultFolder $VHDFolder
-    Write-Log "Logging to file: $LogFile"
-    Write-Host ""
+    $LogFile = Initialize-Script -LogFile $LogFile -DefaultLogFolder $VHDFolder
 
     # Setup VHD folder
     if (-not (Test-Path $VHDFolder)) {
@@ -388,12 +302,7 @@ try {
     Test-InputValidation -Memory $Memory -CPU $CPU -VHDFolder $VHDFolder
 
     # Detect GPUs
-    Write-Log "Detecting available GPUs..."
-    $availableGPUs = Get-AllAvailableGPUs
-    Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
-    foreach ($gpu in $availableGPUs) {
-        Write-Log "  - $($gpu.FriendlyName)"
-    }
+    $availableGPUs = Show-AvailableGPUs
 
     # Handle empty VHD or source VHDX
     $useEmptyVHD = $EmptyVHD
@@ -448,30 +357,13 @@ try {
     # VM paths
     $vhdPath = Join-Path $VHDFolder "$VMName.vhdx"
 
-    # Show deployment plan
+    # Show deployment summary
     Write-Host ""
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "  Deployment Plan" -ForegroundColor Yellow
-    Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "VM Name: $VMName" -ForegroundColor White
-    Write-Host "Memory: $($Memory / 1MB) MB" -ForegroundColor Gray
-    Write-Host "CPUs: $CPU" -ForegroundColor Gray
-    Write-Host "Internal IP: $InternalIP" -ForegroundColor Gray
-    Write-Host "Hostname: $hostname" -ForegroundColor Gray
-    Write-Host "VHD Path: $vhdPath" -ForegroundColor Gray
+    Write-Host "Deploying: $VMName (Memory: $($Memory / 1MB)MB, CPUs: $CPU, IP: $InternalIP)" -ForegroundColor Yellow
     if ($useEmptyVHD) {
-        Write-Host "VHD Type: Empty ($VHDSizeGB GB)" -ForegroundColor Yellow
-        Write-Host "NOTE: You will need to install an OS manually" -ForegroundColor Yellow
-    } else {
-        Write-Host "VHD Type: From template" -ForegroundColor Gray
+        Write-Host "VHD Type: Empty ($VHDSizeGB GB) - OS installation required" -ForegroundColor Yellow
     }
     Write-Host ""
-
-    $confirm = Read-Host "Continue with deployment? (Y/N)"
-    if ($confirm -notmatch '^[Yy]') {
-        Write-Log "Deployment cancelled by user" -Level Warning
-        exit 0
-    }
 
     # Select GPU
     $assignedGPU = Select-GPUForVM -VMName $VMName -AvailableGPUs $availableGPUs -AssignedGPU $null
