@@ -42,7 +42,7 @@ function Show-CurrentDefaults {
 
     Write-Host ""
     Write-Host "Current Default Settings:" -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "-----------------------------------------" -ForegroundColor DarkGray
 
     if ($null -eq $Settings) {
         Write-Host "  (No settings configured yet)" -ForegroundColor Yellow
@@ -69,7 +69,7 @@ function Show-CurrentDefaults {
         Write-Host $Settings.Updated -ForegroundColor DarkGray
     }
 
-    Write-Host "─────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "-----------------------------------------" -ForegroundColor DarkGray
 }
 
 function Read-ValidatedInput {
@@ -241,12 +241,12 @@ try {
     # Show summary of changes
     Write-Host ""
     Write-Host "New Settings:" -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "-----------------------------------------" -ForegroundColor DarkGray
     Write-Host "  VHD Folder:     $($newSettings.VHDFolder)" -ForegroundColor White
     Write-Host "  Template VHDX:  $($newSettings.TemplateVHDX)" -ForegroundColor White
     Write-Host "  Default Memory: $(Format-Bytes $newSettings.DefaultMemory)" -ForegroundColor White
     Write-Host "  Default CPU:    $($newSettings.DefaultCPU)" -ForegroundColor White
-    Write-Host "─────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "-----------------------------------------" -ForegroundColor DarkGray
 
     Write-Host ""
     $confirm = Read-Host "Save these settings? (Y/N)"
