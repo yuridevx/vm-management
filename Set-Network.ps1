@@ -155,10 +155,11 @@ try {
         Write-Log "Network configuration successful" -Level Success
 
         # Update registry with new IP only (MACs and hostname are generated fresh each time)
-        $vmData.InternalIP = $targetIP
-        $vmData.Configured = $true
-
-        Save-VMInstanceToRegistry -VMID $vmData.ID -VMData $vmData
+        $updateData = @{
+            InternalIP = $targetIP
+            Configured = $true
+        }
+        Save-VMInstanceToRegistry -VMID $vmData.ID -VMData $updateData
         Write-Log "Registry updated" -Level Success
     }
     else {
