@@ -130,7 +130,7 @@ try {
     }
 
     # Detect GPUs
-    $availableGPUs = Show-AvailableGPUs
+    $availableGPUs = @(Show-AvailableGPUs)
 
     # Show recreation plan
     Write-Host ""

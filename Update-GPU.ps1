@@ -99,7 +99,7 @@ try {
     }
 
     # Detect GPUs
-    $availableGPUs = Show-AvailableGPUs
+    $availableGPUs = @(Show-AvailableGPUs)
     Write-Host ""
 
     # Get template path from global settings (already loaded at script start)

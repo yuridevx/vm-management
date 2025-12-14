@@ -274,7 +274,7 @@ try {
     Test-InputValidation -Memory $Memory -CPU $CPU -VHDFolder $VHDFolder
 
     # Detect GPUs
-    $availableGPUs = Show-AvailableGPUs
+    $availableGPUs = @(Show-AvailableGPUs)
 
     # Handle empty VHD or template VHDX
     $useEmptyVHD = $EmptyVHD

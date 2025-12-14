@@ -181,7 +181,7 @@ try {
 
     # Show GPUs
     Write-Host "Available GPUs:" -ForegroundColor Yellow
-    $gpus = Get-AllAvailableGPUs
+    $gpus = @(Get-AllAvailableGPUs)
     if ($gpus.Count -eq 0) {
         Write-Host "  No GPUs detected" -ForegroundColor Gray
     }

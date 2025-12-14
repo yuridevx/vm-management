@@ -77,7 +77,7 @@ try {
     Write-Host ""
 
     # Detect available GPUs
-    $availableGPUs = Show-AvailableGPUs
+    $availableGPUs = @(Show-AvailableGPUs)
     Write-Host ""
 
     # Select GPU
@@ -129,7 +129,9 @@ try {
 
     $existingAdapters = @(Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue)
     $hadExistingAdapter = $existingAdapters.Count -gt 0
-    $previousInstancePath = if ($hadExistingAdapter) { $existingAdapters[0].InstancePath } else { $null }
+
+    # Check if -InstancePath parameter is supported (Windows Server 2022+ / Windows 11+)
+    $supportsInstancePath = (Get-Command Add-VMGpuPartitionAdapter).Parameters.ContainsKey('InstancePath')
 
     try {
         # Step 1: Remove ALL existing adapters (ensure only 1 GPU)
@@ -139,9 +141,18 @@ try {
             Write-Log "Existing GPU partition adapter(s) removed" -Level Success
         }
 
-        # Step 2: Add new GPU partition adapter with specific GPU assignment
+        # Step 2: Add new GPU partition adapter
         Write-Log "Adding new GPU partition adapter..." -Level Info
-        Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $selectedGPU.InstancePath -ErrorAction Stop
+        if ($supportsInstancePath) {
+            # Use -InstancePath to target specific GPU (Windows Server 2022+ / Windows 11+)
+            Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $selectedGPU.InstancePath -ErrorAction Stop
+        } else {
+            # Fallback: Add without specifying GPU (Windows 10/Server 2019 - auto-assigns available GPU)
+            if ($availableGPUs.Count -gt 1) {
+                Write-Log "Note: This Windows version doesn't support targeting specific GPUs. The first available GPU will be assigned." -Level Warning
+            }
+            Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
+        }
         Write-Log "GPU partition adapter added with GPU: $($selectedGPU.FriendlyName)" -Level Success
     }
     catch {
@@ -149,11 +160,7 @@ try {
         if ($hadExistingAdapter) {
             Write-Log "GPU swap failed, attempting to restore previous adapter..." -Level Warning
             try {
-                if ($previousInstancePath) {
-                    Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $previousInstancePath -ErrorAction Stop
-                } else {
-                    Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-                }
+                Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
                 Write-Log "Previous GPU adapter restored" -Level Warning
             }
             catch {
@@ -167,7 +174,7 @@ try {
     $vmData.AssignedGPU = $selectedGPU.InstancePath
     $vmData.GPUName = $selectedGPU.FriendlyName
 
-    Save-VMInstanceToRegistry -VMID $vmData.ID -VMData $vmData
+    $null = Save-VMInstanceToRegistry -VMID $vmData.ID -VMData $vmData
     Write-Log "Registry updated with new GPU assignment" -Level Success
 
     # Summary

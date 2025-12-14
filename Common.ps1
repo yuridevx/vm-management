@@ -1535,7 +1535,8 @@ function Get-AllAvailableGPUs {
         throw "No available GPUs found."
     }
 
-    return $gpuList
+    # Use comma operator to prevent PowerShell from unwrapping single-element arrays
+    return ,$gpuList
 }
 
 function Get-GpuInfo {
@@ -1582,11 +1583,11 @@ function Show-AvailableGPUs {
     )
 
     Write-Log $Title -Level Info
-    $availableGPUs = Get-AllAvailableGPUs
+    $availableGPUs = @(Get-AllAvailableGPUs)
 
     if ($availableGPUs.Count -eq 0) {
         Write-Log "No GPUs detected" -Level Warning
-        return @()
+        return ,@()
     }
 
     Write-Log "Found $($availableGPUs.Count) GPU(s):" -Level Success
@@ -1594,7 +1595,8 @@ function Show-AvailableGPUs {
         Write-Log "  - $($gpu.FriendlyName)"
     }
 
-    return $availableGPUs
+    # Use comma operator to prevent PowerShell from unwrapping single-element arrays
+    return ,$availableGPUs
 }
 
 function Select-GPUForVM {
@@ -1851,12 +1853,20 @@ function Initialize-VMConfiguration {
 
     # Add GPU partition adapter with specific GPU assignment (ensure only 1 GPU)
     Get-VMGpuPartitionAdapter -VMName $VMName -ErrorAction SilentlyContinue | Remove-VMGpuPartitionAdapter -ErrorAction SilentlyContinue
-    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath)) {
+    
+    # Check if -InstancePath parameter is supported (Windows Server 2022+ / Windows 11+)
+    $supportsInstancePath = (Get-Command Add-VMGpuPartitionAdapter).Parameters.ContainsKey('InstancePath')
+    
+    if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath) -and $supportsInstancePath) {
         Add-VMGpuPartitionAdapter -VMName $VMName -InstancePath $GPUInstancePath -ErrorAction Stop
         Write-Log "VM '$VMName' GPU assigned: $GPUInstancePath" -Level Success
     } else {
         Add-VMGpuPartitionAdapter -VMName $VMName -ErrorAction Stop
-        Write-Log "VM '$VMName' GPU: auto-assigned" -Level Warning
+        if (-not [string]::IsNullOrWhiteSpace($GPUInstancePath) -and -not $supportsInstancePath) {
+            Write-Log "VM '$VMName' GPU: auto-assigned (specific GPU targeting not supported on this Windows version)" -Level Warning
+        } else {
+            Write-Log "VM '$VMName' GPU: auto-assigned" -Level Warning
+        }
     }
 
     # Get assigned MAC addresses
